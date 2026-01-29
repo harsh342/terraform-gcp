@@ -68,11 +68,11 @@ Create secrets in GCP Secret Manager before running Terraform:
 ```sh
 # Encryption key
 echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-encryption-key \
-  --data-file=- --project=development-485613
+  --data-file=- --project=YOUR_PROJECT_ID
 
 # Database password
 echo -n "your-secure-password" | gcloud secrets create n8n-db-password \
-  --data-file=- --project=development-485613
+  --data-file=- --project=YOUR_PROJECT_ID
 ```
 
 ### Deploy
@@ -96,7 +96,7 @@ kubectl apply --server-side -f https://github.com/external-secrets/external-secr
 gcloud sql users create n8n \
   --instance=n8n-postgres \
   --password="your-secure-password" \
-  --project=development-485613
+  --project=YOUR_PROJECT_ID
 ```
 
 ## Coding Style & Naming Conventions

@@ -1,16 +1,16 @@
 /*
   variables.tf
-  - Inputs with sensible defaults derived from your uploaded main.tf:
-      project: development-485613
+  - Inputs with sensible defaults for region and zone:
       region:  europe-north1
       zone:    europe-north1-a
+  - project_id is required (no default) to avoid exposing project IDs in public repos
   - Also includes n8n + database settings and secrets.
 */
 
 variable "project_id" {
   type        = string
-  description = "GCP project id"
-  default     = "development-485613"
+  description = "GCP project id (required - set via TF_VAR_project_id or terraform.tfvars)"
+  # No default - must be provided to avoid exposing project IDs in public repos
 }
 
 variable "region" {

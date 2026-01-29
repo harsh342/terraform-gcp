@@ -32,6 +32,11 @@ resource "helm_release" "n8n" {
     # Chart expects a secret containing the key: N8N_ENCRYPTION_KEY
     existingEncryptionKeySecret = "n8n-keys"
 
+    # Database configuration - use external PostgreSQL
+    db = {
+      type = "postgresdb"
+    }
+
     # External PostgreSQL configuration (Cloud SQL)
     externalPostgresql = {
       host           = google_sql_database_instance.n8n.private_ip_address
@@ -44,11 +49,6 @@ resource "helm_release" "n8n" {
     # Disable in-cluster PostgreSQL
     postgresql = {
       enabled = false
-    }
-
-    # Extra environment variables (as key-value map)
-    extraEnvVars = {
-      DB_TYPE = "postgresdb"
     }
 
     # Service configuration

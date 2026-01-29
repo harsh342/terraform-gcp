@@ -46,3 +46,14 @@ Thumbs.db
 *.tmp
 *.log
 
+# Service account keys and credentials (GCP service account keys are JSON)
+*-key.json
+*credentials*.json
+service-account*.json
+*service-account*.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
+

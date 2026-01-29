@@ -7,10 +7,27 @@ terraform {
   }
 }
 
+variable "project_id" {
+  type        = string
+  description = "GCP project ID"
+}
+
+variable "region" {
+  type        = string
+  description = "GCP region"
+  default     = "europe-north1"
+}
+
+variable "zone" {
+  type        = string
+  description = "GCP zone"
+  default     = "europe-north1-a"
+}
+
 provider "google" {
-  project = "development-485613"
-  region  = "europe-north1"
-  zone    = "europe-north1-a"
+  project = var.project_id
+  region  = var.region
+  zone    = var.zone
 }
 
 resource "google_compute_network" "vpc_network" {

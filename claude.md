@@ -120,11 +120,11 @@ terraform destroy
 ```sh
 # Create encryption key secret
 echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-encryption-key \
-  --data-file=- --project=development-485613
+  --data-file=- --project=YOUR_PROJECT_ID
 
 # Create database password secret
 echo -n "your-secure-password" | gcloud secrets create n8n-db-password \
-  --data-file=- --project=development-485613
+  --data-file=- --project=YOUR_PROJECT_ID
 ```
 
 ### Step 2: Deploy Infrastructure
@@ -154,7 +154,7 @@ kubectl apply --server-side -f https://github.com/external-secrets/external-secr
 gcloud sql users create n8n \
   --instance=n8n-postgres \
   --password="your-secure-password" \
-  --project=development-485613
+  --project=YOUR_PROJECT_ID
 ```
 
 ### Step 5: Complete Deployment
@@ -169,7 +169,7 @@ terraform apply \
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `project_id` | GCP project ID | `development-485613` |
+| `project_id` | GCP project ID | (required, no default) |
 | `region` | GCP region | `europe-north1` |
 | `zone` | GCP zone | `europe-north1-a` |
 | `network_name` | VPC network name | `n8n-network` |

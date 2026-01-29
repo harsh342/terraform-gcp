@@ -330,7 +330,7 @@ graph TB
         USER((Users))
     end
     
-    subgraph "GCP Project: development-485613"
+    subgraph "GCP Project: YOUR_PROJECT_ID"
         subgraph "VPC: n8n-network"
             subgraph "Region: europe-north1"
                 subgraph "Subnet: n8n-network-subnet<br/>10.10.0.0/16"
@@ -376,11 +376,11 @@ graph TB
 ```bash
 # Generate and store the n8n encryption key
 echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-encryption-key \
-  --data-file=- --project=development-485613
+  --data-file=- --project=YOUR_PROJECT_ID
 
 # Store the database password (use a secure password)
 echo -n "your-secure-db-password" | gcloud secrets create n8n-db-password \
-  --data-file=- --project=development-485613
+  --data-file=- --project=YOUR_PROJECT_ID
 ```
 
 ### Step 2: Deploy Infrastructure
@@ -402,7 +402,7 @@ After the GKE cluster is created, install ESO:
 
 ```bash
 # Get cluster credentials
-gcloud container clusters get-credentials n8n-gke --zone europe-north1-a --project development-485613
+gcloud container clusters get-credentials n8n-gke --zone europe-north1-a --project YOUR_PROJECT_ID
 
 # Install ESO using kubectl (server-side apply for large CRDs)
 kubectl apply --server-side -f https://github.com/external-secrets/external-secrets/releases/download/v0.12.1/external-secrets.yaml
@@ -418,7 +418,7 @@ kubectl get pods -A | grep external
 gcloud sql users create n8n \
   --instance=n8n-postgres \
   --password="your-secure-db-password" \
-  --project=development-485613
+  --project=YOUR_PROJECT_ID
 ```
 
 ### Step 5: Complete Deployment
@@ -454,7 +454,7 @@ kubectl get svc -n n8n
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `project_id` | GCP project ID | `development-485613` |
+| `project_id` | GCP project ID | (required, no default) |
 | `region` | GCP region | `europe-north1` |
 | `zone` | GCP zone | `europe-north1-a` |
 | `network_name` | VPC network name | `n8n-network` |
@@ -527,7 +527,7 @@ kubectl get secrets -n n8n
 terraform output cloudsql_private_ip
 
 # Check if database user exists
-gcloud sql users list --instance=n8n-postgres --project=development-485613
+gcloud sql users list --instance=n8n-postgres --project=YOUR_PROJECT_ID
 ```
 
 ## Terraform Commands
