@@ -51,9 +51,17 @@ Thumbs.db
 *credentials*.json
 service-account*.json
 *service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Environment files
 .env
 .env.local
 .env.*.local
+
+# Backup files
+*.backup
+*.bak
 
