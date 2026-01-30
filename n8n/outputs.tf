@@ -38,3 +38,8 @@ output "cloudsql_private_ip" {
 output "cloudsql_database" {
   value = google_sql_database.n8n.name
 }
+
+output "n8n_db_password" {
+  value     = random_password.n8n_db_password.result
+  sensitive = true
+}
