@@ -80,8 +80,18 @@ echo -n "your-secure-password" | gcloud secrets create n8n-db-password \
 export TF_VAR_n8n_encryption_key_secret_name="n8n-encryption-key"
 export TF_VAR_n8n_db_password_secret_name="n8n-db-password"
 
-terraform init
-terraform apply
+terrafrom init
+
+terraform apply \
+  -var="project_id=YOUR_PROJECT_ID" \
+  -var="region=europe-north1" \
+  -var="zone=europe-north1-a" \
+  -var="network_name=n8n-network" \
+  -var="cluster_name=n8n-gke" \
+  -var="n8n_db_user=n8n" \
+  -var="cloudsql_instance_name=n8n-postgres" \
+  -var="cloudsql_database_name=n8n" \
+  -var="external_secrets_gcp_sa_name=n8n-external-secrets"
 ```
 
 ### Post-deployment: Install External Secrets Operator
