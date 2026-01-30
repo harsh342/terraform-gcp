@@ -393,7 +393,16 @@ export TF_VAR_n8n_db_password_secret_name="n8n-db-password"
 # Initialize and apply
 cd n8n/
 terraform init
-terraform apply
+terraform apply \
+  -var="project_id=YOUR_PROJECT_ID" \
+  -var="region=europe-north1" \
+  -var="zone=europe-north1-a" \
+  -var="network_name=n8n-network" \
+  -var="cluster_name=n8n-gke" \
+  -var="n8n_db_user=n8n" \
+  -var="cloudsql_instance_name=n8n-postgres" \
+  -var="cloudsql_database_name=n8n" \
+  -var="external_secrets_gcp_sa_name=n8n-external-secrets"
 ```
 
 ### Step 3: Install External Secrets Operator
@@ -425,7 +434,17 @@ gcloud sql users create n8n \
 
 ```bash
 # Re-run terraform to create K8s resources
+# Re-run terraform to create K8s resources
 terraform apply \
+  -var="project_id=YOUR_PROJECT_ID" \
+  -var="region=europe-north1" \
+  -var="zone=europe-north1-a" \
+  -var="network_name=n8n-network" \
+  -var="cluster_name=n8n-gke" \
+  -var="n8n_db_user=n8n" \
+  -var="cloudsql_instance_name=n8n-postgres" \
+  -var="cloudsql_database_name=n8n" \
+  -var="external_secrets_gcp_sa_name=n8n-external-secrets" \
   -var="n8n_encryption_key_secret_name=n8n-encryption-key" \
   -var="n8n_db_password_secret_name=n8n-db-password"
 ```
@@ -454,19 +473,23 @@ kubectl get svc -n n8n
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `project_id` | GCP project ID | (required, no default) |
-| `region` | GCP region | `europe-north1` |
-| `zone` | GCP zone | `europe-north1-a` |
-| `network_name` | VPC network name | `n8n-network` |
-| `cluster_name` | GKE cluster name | `n8n-gke` |
+| `project_id` | GCP project ID | (required) |
+| `region` | GCP region | (required) |
+| `zone` | GCP zone | (required) |
+| `network_name` | VPC network name | (required) |
+| `cluster_name` | GKE cluster name | (required) |
 | `namespace` | K8s namespace | `n8n` |
 | `node_machine_type` | Node VM type | `e2-standard-4` |
 | `node_count` | Number of nodes | `2` |
 | `n8n_timezone` | Container timezone | `Europe/London` |
 | `n8n_host` | Ingress hostname | `""` (uses LoadBalancer) |
 | `n8n_chart_version` | Helm chart version | `1.16.25` |
+| `cloudsql_instance_name` | Cloud SQL instance name | (required) |
+| `cloudsql_database_name` | Cloud SQL database name | (required) |
+| `n8n_db_user` | Cloud SQL database user | (required) |
 | `cloudsql_tier` | Cloud SQL tier | `db-custom-2-7680` |
 | `cloudsql_disk_size_gb` | Disk size | `50` |
+| `external_secrets_gcp_sa_name` | GCP service account name for ESO | (required) |
 | `n8n_encryption_key_secret_name` | Secret Manager secret name for encryption key | (required) |
 | `n8n_db_password_secret_name` | Secret Manager secret name for DB password | (required) |
 

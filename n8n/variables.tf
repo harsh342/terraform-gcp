@@ -16,25 +16,21 @@ variable "project_id" {
 variable "region" {
   type        = string
   description = "GCP region"
-  default     = "europe-north1"
 }
 
 variable "zone" {
   type        = string
   description = "GCP zone"
-  default     = "europe-north1-a"
 }
 
 variable "network_name" {
   type        = string
   description = "VPC network name for n8n infrastructure"
-  default     = "n8n-network"
 }
 
 variable "cluster_name" {
   type        = string
   description = "GKE cluster name"
-  default     = "n8n-gke"
 }
 
 variable "namespace" {
@@ -81,19 +77,16 @@ variable "n8n_db_password_secret_name" {
 variable "n8n_db_user" {
   type        = string
   description = "Cloud SQL database user for n8n (user must exist)."
-  default     = "n8n"
 }
 
 variable "cloudsql_instance_name" {
   type        = string
   description = "Cloud SQL instance name."
-  default     = "n8n-postgres"
 }
 
 variable "cloudsql_database_name" {
   type        = string
   description = "Cloud SQL database name."
-  default     = "n8n"
 }
 
 variable "cloudsql_tier" {
@@ -123,7 +116,6 @@ variable "external_secrets_k8s_sa_name" {
 variable "external_secrets_gcp_sa_name" {
   type        = string
   description = "GCP service account name used for Secret Manager access."
-  default     = "n8n-external-secrets"
 }
 
 variable "external_secrets_store_name" {

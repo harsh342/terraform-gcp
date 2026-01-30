@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # terraform-gcp
 
 Terraform configurations for provisioning and deploying infrastructure on Google Cloud Platform (GCP).
