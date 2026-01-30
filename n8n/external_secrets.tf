@@ -172,3 +172,13 @@ resource "kubectl_manifest" "n8n_db" {
 
   depends_on = [kubectl_manifest.secret_store]
 }
+
+# Add a wait timer to allow External Secrets to synchronize
+resource "time_sleep" "wait_for_secrets" {
+  create_duration = "30s"
+
+  depends_on = [
+    kubectl_manifest.n8n_keys,
+    kubectl_manifest.n8n_db
+  ]
+}

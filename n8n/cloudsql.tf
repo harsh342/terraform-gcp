@@ -1,7 +1,8 @@
 /*
   cloudsql.tf
   - Provisions a private-IP Cloud SQL (PostgreSQL) instance for n8n.
-  - Creates the database; the DB user/password are managed outside Terraform.
+  - Creates the database and database user with a secure random password.
+  - Stores the password in Secret Manager for External Secrets to sync.
 */
 
 resource "google_sql_database_instance" "n8n" {
@@ -26,4 +27,33 @@ resource "google_sql_database_instance" "n8n" {
 resource "google_sql_database" "n8n" {
   name     = var.cloudsql_database_name
   instance = google_sql_database_instance.n8n.name
+}
+
+# Generate a secure random password for the database user
+resource "random_password" "n8n_db_password" {
+  length  = 32
+  special = true
+}
+
+# Create the database user
+resource "google_sql_user" "n8n" {
+  name     = var.n8n_db_user
+  instance = google_sql_database_instance.n8n.name
+  password = random_password.n8n_db_password.result
+
+  depends_on = [google_sql_database.n8n]
+}
+
+# Check if the Secret Manager secret exists
+data "google_secret_manager_secret" "n8n_db_password" {
+  secret_id = var.n8n_db_password_secret_name
+  project   = var.project_id
+}
+
+# Store the password in Secret Manager (create a new version)
+resource "google_secret_manager_secret_version" "n8n_db_password" {
+  secret      = data.google_secret_manager_secret.n8n_db_password.id
+  secret_data = random_password.n8n_db_password.result
+
+  depends_on = [google_sql_user.n8n]
 }

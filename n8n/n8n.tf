@@ -78,5 +78,10 @@ resource "helm_release" "n8n" {
     }
   })]
 
-  depends_on = [kubectl_manifest.n8n_keys, kubectl_manifest.n8n_db]
+  depends_on = [
+    kubectl_manifest.n8n_keys,
+    kubectl_manifest.n8n_db,
+    time_sleep.wait_for_secrets,
+    google_sql_user.n8n
+  ]
 }

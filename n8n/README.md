@@ -370,30 +370,46 @@ graph TB
 4. kubectl installed
 5. `gke-gcloud-auth-plugin` installed (run: `gcloud components install gke-gcloud-auth-plugin`)
 
-### Step 1: Create Secrets in GCP Secret Manager
+### Step 1: Create Encryption Key Secret
 
-**Before running Terraform**, create the required secrets:
+**Before running Terraform**, create the n8n encryption key secret:
 
 ```bash
 # Generate and store the n8n encryption key
 echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-encryption-key \
   --data-file=- --project=YOUR_PROJECT_ID
+```
 
-# Store the database password (use a secure password)
-echo -n "your-secure-db-password" | gcloud secrets create n8n-db-password \
+> [!NOTE]
+> The database password is **automatically generated** by Terraform using a secure random password generator and stored in Secret Manager. You don't need to create it manually.
+
+### Step 2: Create Database Password Secret Placeholder
+
+**Before running Terraform**, create an empty secret for the database password:
+
+```bash
+# Create empty secret (Terraform will populate it with a random password)
+echo -n "placeholder" | gcloud secrets create n8n-db-password \
   --data-file=- --project=YOUR_PROJECT_ID
 ```
 
-### Step 2: Initial Infrastructure Deployment
+> [!IMPORTANT]
+> This placeholder will be **automatically replaced** by Terraform with a secure 32-character random password.
 
-**Important:** This first apply creates the GKE cluster, Cloud SQL instance, and External Secrets Operator, but intentionally skips the n8n application deployment.
+### Step 3: Deploy Complete Infrastructure
+
+**Single-step deployment** - Terraform will automatically:
+- Create GKE cluster and Cloud SQL instance
+- Generate a secure random database password
+- Create the database user with the generated password
+- Store the password in Secret Manager
+- Deploy External Secrets Operator
+- Deploy n8n application
 
 ```bash
 cd n8n/
 terraform init
 
-# First apply: Create infrastructure (cluster, database, ESO)
-# Note: The n8n Helm release will fail on this first apply because the database user doesn't exist yet
 terraform apply \
   -var="project_id=YOUR_PROJECT_ID" \
   -var="region=europe-north1" \
@@ -408,41 +424,19 @@ terraform apply \
   -var="n8n_db_password_secret_name=n8n-db-password"
 ```
 
-### Step 3: Create Database User
+**Deployment time:** ~8-12 minutes (Cloud SQL takes ~3 minutes, n8n deployment ~2-5 minutes)
 
-**Critical:** The n8n database user must be created before the n8n application can connect.
+### Step 4: Retrieve Database Password (Optional)
 
-```bash
-# Get cluster credentials for kubectl access
-gcloud container clusters get-credentials n8n-gke --zone europe-north1-a --project YOUR_PROJECT_ID
-
-# Create the n8n database user (use the same password from Step 1)
-gcloud sql users create n8n \
-  --instance=n8n-postgres \
-  --password="your-secure-db-password" \
-  --project=YOUR_PROJECT_ID
-```
-
-### Step 4: Complete n8n Deployment
-
-Now that the database user exists, re-run terraform to deploy the n8n application:
+If you need to access the auto-generated database password:
 
 ```bash
-terraform apply \
-  -var="project_id=YOUR_PROJECT_ID" \
-  -var="region=europe-north1" \
-  -var="zone=europe-north1-a" \
-  -var="network_name=n8n-network" \
-  -var="cluster_name=n8n-gke" \
-  -var="n8n_db_user=n8n" \
-  -var="cloudsql_instance_name=n8n-postgres" \
-  -var="cloudsql_database_name=n8n" \
-  -var="external_secrets_gcp_sa_name=n8n-external-secrets" \
-  -var="n8n_encryption_key_secret_name=n8n-encryption-key" \
-  -var="n8n_db_password_secret_name=n8n-db-password"
-```
+# Via gcloud CLI
+gcloud secrets versions access latest --secret=n8n-db-password --project=YOUR_PROJECT_ID
 
-**Note:** The n8n Helm release will be automatically recreated and should now succeed.
+# Via Terraform output (after adding output to outputs.tf)
+terraform output -raw n8n_db_password
+```
 
 ### Step 5: Access n8n
 
@@ -538,25 +532,38 @@ This script checks:
 
 ### Common Issues
 
+### n8n pod in CrashLoopBackOff with "SASL: client password must be a string"
+
+**Symptom:** Pod logs show `SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string`
+
+**Cause:** The External Secret key name doesn't match what the n8n Helm chart expects.
+
+**Solution:**
+```bash
+# Check the secret key name
+kubectl get secret n8n-db -n n8n -o jsonpath='{.data}' | jq
+
+# Should show: {"postgres-password": "..."}
+# If it shows a different key name, update external_secrets.tf line 166:
+# secretKey = "postgres-password"  # Must be exactly this
+
+# Restart the n8n deployment
+kubectl rollout restart deployment n8n -n n8n
+```
+
 ### n8n pod in CrashLoopBackOff with "password authentication failed"
 
 **Symptom:** Pod logs show `password authentication failed for user "n8n"`
 
-**Cause:** The database user doesn't exist or was created with the wrong password.
+**Cause:** The database user doesn't exist (shouldn't happen with automated creation, but possible if Terraform was interrupted).
 
 **Solution:**
 ```bash
 # Check if the n8n user exists
 gcloud sql users list --instance=n8n-postgres --project=YOUR_PROJECT_ID
 
-# If missing, create it (use the same password from Secret Manager)
-gcloud sql users create n8n \
-  --instance=n8n-postgres \
-  --password="your-secure-db-password" \
-  --project=YOUR_PROJECT_ID
-
-# Restart the n8n deployment
-kubectl rollout restart deployment n8n -n n8n
+# If missing, re-run terraform apply to create it
+terraform apply
 
 # Watch the pod come back up
 kubectl get pods -n n8n -w
