@@ -23,6 +23,7 @@ resource "helm_release" "n8n" {
   repository = "https://community-charts.github.io/helm-charts"
   chart      = "n8n"
   version    = var.n8n_chart_version
+  timeout    = 600 # Increase timeout to 10m to handle potential image pull or secret sync delays
 
   # All chart configuration passed as a values.yaml payload
   values = [yamlencode({

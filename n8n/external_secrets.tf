@@ -36,6 +36,41 @@ resource "google_service_account_iam_member" "external_secrets_wi" {
   depends_on = [google_container_cluster.gke]
 }
 
+# Add a wait timer to allow Workload Identity bindings to propagate
+resource "time_sleep" "wait_for_wi" {
+  create_duration = "60s"
+
+  depends_on = [google_service_account_iam_member.external_secrets_wi]
+}
+
+resource "helm_release" "external_secrets" {
+  name       = "external-secrets"
+  namespace  = kubernetes_namespace_v1.n8n.metadata[0].name
+  repository = "https://charts.external-secrets.io"
+  chart      = "external-secrets"
+  version    = "0.9.13" # Pinning version for stability
+
+  set {
+    name  = "installCRDs"
+    value = "true"
+  }
+
+  set {
+    name  = "serviceAccount.create"
+    value = "false"
+  }
+
+  set {
+    name  = "serviceAccount.name"
+    value = var.external_secrets_k8s_sa_name
+  }
+
+  depends_on = [
+    kubernetes_service_account_v1.external_secrets,
+    time_sleep.wait_for_wi
+  ]
+}
+
 resource "kubectl_manifest" "secret_store" {
   yaml_body = yamlencode({
     apiVersion = "external-secrets.io/v1beta1"
@@ -62,7 +97,10 @@ resource "kubectl_manifest" "secret_store" {
     }
   })
 
-  depends_on = [kubernetes_service_account_v1.external_secrets]
+  depends_on = [
+    kubernetes_service_account_v1.external_secrets,
+    helm_release.external_secrets
+  ]
 }
 
 locals {
