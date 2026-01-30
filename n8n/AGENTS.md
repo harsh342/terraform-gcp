@@ -136,3 +136,59 @@ gcloud sql users create n8n \
 - `google_service_account_iam_member.external_secrets_wi` depends on `google_container_cluster.gke` for Workload Identity pool.
 - `kubectl_manifest` resources depend on `kubernetes_service_account_v1.external_secrets`.
 - `helm_release.n8n` depends on `kubectl_manifest.n8n_keys` and `kubectl_manifest.n8n_db`.
+
+## Common Deployment Issues for AI Agents
+
+When helping users deploy this infrastructure, be aware of these critical issues:
+
+### 1. Database User Must Be Created Manually
+
+**Issue:** Terraform cannot create Cloud SQL users with passwords (security limitation).
+
+**Solution:** Always guide users to:
+1. Run first `terraform apply` (cluster will be created, n8n Helm release may fail)
+2. Create database user: `gcloud sql users create n8n --instance=n8n-postgres --password="PASSWORD"`
+3. Run second `terraform apply` (n8n will now succeed)
+
+**Symptom:** n8n pod shows `CrashLoopBackOff` with logs: `password authentication failed for user "n8n"`
+
+### 2. kubectl Plugin Required
+
+**Issue:** GKE requires `gke-gcloud-auth-plugin` for kubectl authentication.
+
+**Solution:** Before any kubectl commands:
+```sh
+gcloud components install gke-gcloud-auth-plugin
+gcloud container clusters get-credentials n8n-gke --zone europe-north1-a
+```
+
+**Symptom:** `executable gke-gcloud-auth-plugin not found`
+
+### 3. All Required Variables Must Be Passed
+
+**Issue:** Variables like `project_id`, `region`, `zone`, `network_name`, `cluster_name`, and secret names have NO defaults.
+
+**Solution:** Always pass all required variables explicitly to `terraform apply`.
+
+**Symptom:** Terraform prompts for input or errors with "variable not set"
+
+### 4. Secret Names vs Secret Values
+
+**Issue:** Users confuse Secret Manager secret names (passed to Terraform) with secret values (not in Terraform).
+
+**Correct flow:**
+1. Create secret in Secret Manager: `gcloud secrets create n8n-encryption-key --data-file=-`
+2. Pass secret NAME to Terraform: `-var="n8n_encryption_key_secret_name=n8n-encryption-key"`
+3. External Secrets Operator fetches the VALUE from Secret Manager
+
+### 5. External Secrets Operator Now Managed by Terraform
+
+**Issue:** Old documentation mentioned manual ESO installation.
+
+**Current:** ESO is now installed via Helm in `external_secrets.tf`. Do NOT guide users to install it manually.
+
+### 6. Troubleshooting Script
+
+**Tool:** `/n8n/troubleshoot.sh PROJECT_ID` checks all prerequisites and common issues.
+
+Use this when helping users diagnose deployment problems.

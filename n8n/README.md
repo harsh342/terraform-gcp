@@ -368,6 +368,7 @@ graph TB
 2. `gcloud` CLI authenticated (`gcloud auth application-default login`)
 3. Terraform >= 1.5.0
 4. kubectl installed
+5. `gke-gcloud-auth-plugin` installed (run: `gcloud components install gke-gcloud-auth-plugin`)
 
 ### Step 1: Create Secrets in GCP Secret Manager
 
@@ -383,58 +384,16 @@ echo -n "your-secure-db-password" | gcloud secrets create n8n-db-password \
   --data-file=- --project=YOUR_PROJECT_ID
 ```
 
-### Step 2: Deploy Infrastructure
+### Step 2: Initial Infrastructure Deployment
+
+**Important:** This first apply creates the GKE cluster, Cloud SQL instance, and External Secrets Operator, but intentionally skips the n8n application deployment.
 
 ```bash
-# Set required environment variables
-export TF_VAR_n8n_encryption_key_secret_name="n8n-encryption-key"
-export TF_VAR_n8n_db_password_secret_name="n8n-db-password"
-
-# Initialize and apply
 cd n8n/
 terraform init
-terraform apply \
-  -var="project_id=YOUR_PROJECT_ID" \
-  -var="region=europe-north1" \
-  -var="zone=europe-north1-a" \
-  -var="network_name=n8n-network" \
-  -var="cluster_name=n8n-gke" \
-  -var="n8n_db_user=n8n" \
-  -var="cloudsql_instance_name=n8n-postgres" \
-  -var="cloudsql_database_name=n8n" \
-  -var="external_secrets_gcp_sa_name=n8n-external-secrets"
-```
 
-### Step 3: Install External Secrets Operator
-
-After the GKE cluster is created, install ESO:
-
-```bash
-# Get cluster credentials
-gcloud container clusters get-credentials n8n-gke --zone europe-north1-a --project YOUR_PROJECT_ID
-
-# Install ESO using kubectl (server-side apply for large CRDs)
-kubectl apply --server-side -f https://github.com/external-secrets/external-secrets/releases/download/v0.12.1/external-secrets.yaml
-
-# Wait for ESO pods to be ready
-kubectl get pods -A | grep external
-```
-
-### Step 4: Create Database User
-
-```bash
-# Create the n8n database user in Cloud SQL
-gcloud sql users create n8n \
-  --instance=n8n-postgres \
-  --password="your-secure-db-password" \
-  --project=YOUR_PROJECT_ID
-```
-
-### Step 5: Complete Deployment
-
-```bash
-# Re-run terraform to create K8s resources
-# Re-run terraform to create K8s resources
+# First apply: Create infrastructure (cluster, database, ESO)
+# Note: The n8n Helm release will fail on this first apply because the database user doesn't exist yet
 terraform apply \
   -var="project_id=YOUR_PROJECT_ID" \
   -var="region=europe-north1" \
@@ -449,7 +408,43 @@ terraform apply \
   -var="n8n_db_password_secret_name=n8n-db-password"
 ```
 
-### Step 6: Access n8n
+### Step 3: Create Database User
+
+**Critical:** The n8n database user must be created before the n8n application can connect.
+
+```bash
+# Get cluster credentials for kubectl access
+gcloud container clusters get-credentials n8n-gke --zone europe-north1-a --project YOUR_PROJECT_ID
+
+# Create the n8n database user (use the same password from Step 1)
+gcloud sql users create n8n \
+  --instance=n8n-postgres \
+  --password="your-secure-db-password" \
+  --project=YOUR_PROJECT_ID
+```
+
+### Step 4: Complete n8n Deployment
+
+Now that the database user exists, re-run terraform to deploy the n8n application:
+
+```bash
+terraform apply \
+  -var="project_id=YOUR_PROJECT_ID" \
+  -var="region=europe-north1" \
+  -var="zone=europe-north1-a" \
+  -var="network_name=n8n-network" \
+  -var="cluster_name=n8n-gke" \
+  -var="n8n_db_user=n8n" \
+  -var="cloudsql_instance_name=n8n-postgres" \
+  -var="cloudsql_database_name=n8n" \
+  -var="external_secrets_gcp_sa_name=n8n-external-secrets" \
+  -var="n8n_encryption_key_secret_name=n8n-encryption-key" \
+  -var="n8n_db_password_secret_name=n8n-db-password"
+```
+
+**Note:** The n8n Helm release will be automatically recreated and should now succeed.
+
+### Step 5: Access n8n
 
 ```bash
 # Get the LoadBalancer IP
@@ -457,6 +452,14 @@ kubectl get svc -n n8n
 
 # Access n8n at http://<EXTERNAL-IP>:5678
 ```
+
+**Example output:**
+```
+NAME   TYPE           CLUSTER-IP    EXTERNAL-IP     PORT(S)          AGE
+n8n    LoadBalancer   10.30.12.23   34.88.229.249   5678:31875/TCP   10m
+```
+
+Access n8n at: **http://34.88.229.249:5678**
 
 ## Provider Versions
 
@@ -517,41 +520,111 @@ kubectl get svc -n n8n
 
 ## Troubleshooting
 
+### Quick Diagnostic Script
+
+Run the included troubleshooting script to check for common issues:
+
+```bash
+./troubleshoot.sh YOUR_PROJECT_ID
+```
+
+This script checks:
+- Secrets exist in Secret Manager
+- Database user exists
+- kubectl plugin is installed
+- Pod status
+- ExternalSecrets are synced
+- LoadBalancer IP is assigned
+
+### Common Issues
+
+### n8n pod in CrashLoopBackOff with "password authentication failed"
+
+**Symptom:** Pod logs show `password authentication failed for user "n8n"`
+
+**Cause:** The database user doesn't exist or was created with the wrong password.
+
+**Solution:**
+```bash
+# Check if the n8n user exists
+gcloud sql users list --instance=n8n-postgres --project=YOUR_PROJECT_ID
+
+# If missing, create it (use the same password from Secret Manager)
+gcloud sql users create n8n \
+  --instance=n8n-postgres \
+  --password="your-secure-db-password" \
+  --project=YOUR_PROJECT_ID
+
+# Restart the n8n deployment
+kubectl rollout restart deployment n8n -n n8n
+
+# Watch the pod come back up
+kubectl get pods -n n8n -w
+```
+
+### kubectl: "executable gke-gcloud-auth-plugin not found"
+
+**Symptom:** kubectl commands fail with missing plugin error
+
+**Solution:**
+```bash
+# Install the plugin
+gcloud components install gke-gcloud-auth-plugin
+
+# Or via Homebrew (if gcloud was installed via brew)
+brew install google-cloud-sdk
+gcloud components install gke-gcloud-auth-plugin
+
+# Regenerate kubeconfig
+gcloud container clusters get-credentials n8n-gke --zone europe-north1-a --project YOUR_PROJECT_ID
+```
+
 ### External Secrets not syncing
+
+**Symptom:** ExternalSecret shows "SecretSyncError"
 
 ```bash
 # Check ExternalSecret status
-kubectl get externalsecret -n n8n
+kubectl describe externalsecret n8n-keys -n n8n
 
 # Check ESO logs
-kubectl logs -n default -l app.kubernetes.io/name=external-secrets
+kubectl logs -n n8n -l app.kubernetes.io/name=external-secrets
 
 # Verify SecretStore is valid
-kubectl get secretstore -n n8n
+kubectl get secretstore -n n8n -o yaml
+
+# Verify secrets exist in Secret Manager
+gcloud secrets list --project=YOUR_PROJECT_ID | grep n8n
+
+# Check Workload Identity binding
+kubectl get sa external-secrets -n n8n -o yaml | grep iam.gke.io
 ```
 
-### n8n pod not starting
+### n8n Helm release times out during terraform apply
 
+**Symptom:** Helm release creation times out after 10 minutes
+
+**Cause:** Usually due to missing database user or secrets.
+
+**Solution:**
 ```bash
-# Check pod status
-kubectl get pods -n n8n
+# Check pod logs
+kubectl logs -n n8n -l app.kubernetes.io/name=n8n --tail=50
 
-# Check pod events
-kubectl describe pod -n n8n -l app.kubernetes.io/name=n8n
+# Check if secrets were synced
+kubectl get secrets -n n8n | grep n8n
 
-# Check if secrets exist
-kubectl get secrets -n n8n
-```
-
-### Database connection issues
-
-```bash
-# Verify Cloud SQL private IP
+# Verify database connection
 terraform output cloudsql_private_ip
-
-# Check if database user exists
-gcloud sql users list --instance=n8n-postgres --project=YOUR_PROJECT_ID
 ```
+
+### Terraform shows helm_release.n8n is "tainted"
+
+**Symptom:** `helm_release.n8n is tainted, so must be replaced`
+
+**Cause:** Previous Helm release failed, Terraform marks it for recreation.
+
+**Solution:** This is normal - Terraform will automatically recreate it on the next apply. Make sure to fix the underlying issue (usually database user) first.
 
 ## Terraform Commands
 
