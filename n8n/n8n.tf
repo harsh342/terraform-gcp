@@ -51,6 +51,14 @@ resource "helm_release" "n8n" {
       enabled = false
     }
 
+    # Extra environment variables for HTTP access
+    extraEnvVars = {
+      # Allow HTTP access (disable HTTPS requirement for dev/testing)
+      N8N_SECURE_COOKIE = "false"
+      # Disable SSL for webhook URLs
+      N8N_PROTOCOL = "http"
+    }
+
     # Service configuration
     service = {
       enabled = true
