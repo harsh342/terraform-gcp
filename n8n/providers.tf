@@ -33,6 +33,11 @@ terraform {
       version = "~> 3.6"
     }
   }
+
+  backend "gcs" {
+    # Bucket specified during init: terraform init -backend-config="bucket=myorg-tfstate-dev"
+    prefix = "n8n"
+  }
 }
 
 # Google provider config (defaults come from variables.tf, matching your original main.tf values)

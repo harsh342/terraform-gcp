@@ -11,7 +11,8 @@
 
 resource "kubernetes_namespace_v1" "n8n" {
   metadata {
-    name = var.namespace
+    name   = local.namespace
+    labels = local.common_labels
   }
 
   depends_on = [google_container_node_pool.primary]
@@ -71,7 +72,7 @@ resource "helm_release" "n8n" {
     ingress = {
       enabled   = var.n8n_host != ""
       className = "gce"
-      hosts     = var.n8n_host != "" ? [{
+      hosts = var.n8n_host != "" ? [{
         host  = var.n8n_host
         paths = [{ path = "/", pathType = "Prefix" }]
       }] : []

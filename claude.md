@@ -8,6 +8,70 @@ Terraform configurations for deploying infrastructure on GCP. Two main directori
 - `learn/` - Simple sandbox configuration (VPC + VM)
 - `n8n/` - Production n8n workflow automation on GKE with Cloud SQL
 
+## Multi-Environment Setup
+
+Supports 3 environments via Terraform workspaces: dev, staging, production.
+
+### Prerequisites (per environment)
+
+**1. Create GCS backend bucket:**
+```sh
+gcloud storage buckets create gs://myorg-tfstate-dev \
+  --project=development \
+  --location=europe-north1 \
+  --uniform-bucket-level-access
+
+gcloud storage buckets update gs://myorg-tfstate-dev --versioning
+```
+
+**2. Create secrets:**
+```sh
+echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-dev-encryption-key \
+  --data-file=- --project=development
+
+echo -n "your-password" | gcloud secrets create n8n-dev-db-password \
+  --data-file=- --project=development
+```
+
+### Deployment
+
+```sh
+cd n8n/
+
+# Create workspace
+terraform workspace new dev
+
+# Initialize
+terraform init -backend-config="bucket=myorg-tfstate-dev"
+
+# Deploy
+terraform plan -var-file=environments/dev.tfvars -out=tfplan-dev
+terraform apply tfplan-dev
+```
+
+### Switching Environments
+
+```sh
+terraform workspace select staging
+terraform plan -var-file=environments/staging.tfvars
+```
+
+### Naming Conventions
+
+Resources: `{org_prefix}-n8n-{environment}-{resource}`
+- VPC: `myorg-n8n-dev-network`
+- GKE: `myorg-n8n-staging-gke`
+- Cloud SQL: `myorg-n8n-production-postgres`
+- K8s namespace: `n8n-{environment}`
+
+### CIDR Allocation
+
+| Env | Subnet | Pods | Services |
+|-----|--------|------|----------|
+| dev | 10.10.0.0/16 | 10.11.0.0/16 | 10.12.0.0/20 |
+| staging | 10.20.0.0/16 | 10.21.0.0/16 | 10.22.0.0/20 |
+| production | 10.30.0.0/16 | 10.31.0.0/16 | 10.32.0.0/20 |
+
 ## Architecture (n8n)
 
 The n8n deployment uses a **multi-provider pattern** unique to Kubernetes-on-GCP scenarios:
@@ -63,38 +127,25 @@ All three K8s providers authenticate using `google_client_config.default.access_
 cd n8n/
 
 # Standard workflow
-terraform init
+terraform init -backend-config="bucket=myorg-tfstate-dev"
 terraform fmt -recursive
 terraform validate
-terraform plan -out tfplan
-terraform apply tfplan
-
-# Apply with all required vars (example)
-terraform apply \
-  -var="project_id=my-project" \
-  -var="region=europe-north1" \
-  -var="zone=europe-north1-a" \
-  -var="network_name=n8n-network" \
-  -var="cluster_name=n8n-gke" \
-  -var="n8n_db_user=n8n" \
-  -var="cloudsql_instance_name=n8n-postgres" \
-  -var="cloudsql_database_name=n8n" \
-  -var="external_secrets_gcp_sa_name=n8n-external-secrets" \
-  -var="n8n_encryption_key_secret_name=n8n-encryption-key" \
-  -var="n8n_db_password_secret_name=n8n-db-password"
+terraform plan -var-file=environments/dev.tfvars -out=tfplan-dev
+terraform apply tfplan-dev
 
 # Get cluster credentials
-gcloud container clusters get-credentials n8n-gke --zone europe-north1-a
+gcloud container clusters get-credentials $(terraform output -raw cluster_name) \
+  --zone $(terraform output -raw zone) --project $(terraform output -raw project_id)
 
 # Check n8n status
-kubectl get pods -n n8n
-kubectl get svc -n n8n
-kubectl logs -n n8n -l app.kubernetes.io/name=n8n
+kubectl get pods -n $(terraform output -raw namespace)
+kubectl get svc -n $(terraform output -raw namespace)
+kubectl logs -n $(terraform output -raw namespace) -l app.kubernetes.io/name=n8n
 
 # Check External Secrets
-kubectl get externalsecret -n n8n
-kubectl get secretstore -n n8n
-kubectl describe externalsecret n8n-keys -n n8n
+kubectl get externalsecret -n $(terraform output -raw namespace)
+kubectl get secretstore -n $(terraform output -raw namespace)
+kubectl describe externalsecret n8n-keys -n $(terraform output -raw namespace)
 ```
 
 ## Deployment Prerequisites

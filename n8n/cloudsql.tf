@@ -6,7 +6,7 @@
 */
 
 resource "google_sql_database_instance" "n8n" {
-  name                = var.cloudsql_instance_name
+  name                = "${local.name_prefix}-postgres"
   region              = var.region
   database_version    = "POSTGRES_15"
   deletion_protection = var.cloudsql_deletion_protection
@@ -14,6 +14,8 @@ resource "google_sql_database_instance" "n8n" {
   settings {
     tier      = var.cloudsql_tier
     disk_size = var.cloudsql_disk_size_gb
+
+    user_labels = local.common_labels
 
     ip_configuration {
       ipv4_enabled    = false

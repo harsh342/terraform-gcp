@@ -1,0 +1,14 @@
+# State files (now in GCS)
+terraform.tfstate*
+*.tfstate*
+
+# Plan files
+tfplan-*
+*.tfplan
+
+# Terraform directory
+.terraform/
+
+# Environment-specific overrides
+environments/*.auto.tfvars
+environments/local.tfvars

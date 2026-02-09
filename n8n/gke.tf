@@ -5,7 +5,7 @@
 */
 
 resource "google_container_cluster" "gke" {
-  name     = var.cluster_name
+  name     = "${local.name_prefix}-gke"
   location = var.zone
 
   network    = google_compute_network.vpc_network.id
@@ -25,11 +25,13 @@ resource "google_container_cluster" "gke" {
     workload_pool = "${var.project_id}.svc.id.goog"
   }
 
+  resource_labels = local.common_labels
+
   depends_on = [google_project_service.apis]
 }
 
 resource "google_container_node_pool" "primary" {
-  name       = "${var.cluster_name}-np"
+  name       = "${local.name_prefix}-gke-np"
   cluster    = google_container_cluster.gke.name
   location   = var.zone
   node_count = var.node_count
@@ -40,8 +42,8 @@ resource "google_container_node_pool" "primary" {
     # Broad scope; you can tighten later (especially if you adopt Workload Identity properly).
     oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
-    labels = {
+    labels = merge(local.common_labels, {
       workload = "n8n"
-    }
+    })
   }
 }

@@ -3,8 +3,16 @@
   - Useful outputs so you can quickly find cluster + namespace.
 */
 
-output "project" {
+output "project_id" {
   value = var.project_id
+}
+
+output "environment" {
+  value = var.environment
+}
+
+output "workspace" {
+  value = terraform.workspace
 }
 
 output "region" {
@@ -24,7 +32,7 @@ output "cluster_name" {
 }
 
 output "namespace" {
-  value = var.namespace
+  value = local.namespace
 }
 
 output "cloudsql_instance_name" {
