@@ -4,8 +4,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # terraform-gcp
 
-Terraform configurations for deploying infrastructure on GCP. Two main directories:
-- `learn/` - Simple sandbox configuration (VPC + VM)
 - `n8n/` - Production n8n workflow automation on GKE with Cloud SQL
 
 ## Multi-Environment Architecture

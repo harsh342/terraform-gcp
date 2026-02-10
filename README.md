@@ -4,11 +4,10 @@ Terraform configurations for deploying infrastructure on Google Cloud Platform.
 
 ## Overview
 
-This repository contains two main Terraform configurations:
+This repository contains the following Terraform configuration:
 
 | Directory | Description | Documentation |
 |-----------|-------------|---------------|
-| **`learn/`** | Simple sandbox (VPC + VM) for learning GCP basics | [main.tf](learn/main.tf) |
 | **`n8n/`** | Multi-environment n8n deployment on GKE with Cloud SQL | [README](n8n/README.md) · [Deployment Guide](n8n/DEPLOYMENT.md) |
 
 ## Quick Start
