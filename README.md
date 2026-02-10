@@ -1,83 +1,163 @@
 # terraform-gcp
 
-Terraform configurations for provisioning and deploying infrastructure on Google Cloud Platform (GCP).
+Terraform configurations for deploying infrastructure on Google Cloud Platform.
 
 ## Overview
 
-This repository contains Infrastructure as Code (IaC) using Terraform to deploy resources on GCP. It consists of two main configurations:
+This repository contains two main Terraform configurations:
 
 | Directory | Description | Documentation |
 |-----------|-------------|---------------|
-| `learn/` | Learning/sandbox configuration for basic GCP resources | [main.tf](learn/main.tf) |
-| `n8n/` | Production n8n workflow automation on GKE | [README.md](n8n/README.md) |
+| **`learn/`** | Simple sandbox (VPC + VM) for learning GCP basics | [main.tf](learn/main.tf) |
+| **`n8n/`** | Multi-environment n8n deployment on GKE with Cloud SQL | [README](n8n/README.md) · [Deployment Guide](n8n/DEPLOYMENT.md) |
 
-## Quick Links
+## Quick Start
 
-- 📖 [Project Documentation](claude.md) - Full project overview, tech stack, and conventions
-- 🚀 [n8n Deployment Guide](n8n/README.md) - Step-by-step deployment instructions with diagrams
-- 🤖 [AI Agent Guidelines](n8n/AGENTS.md) - Guidelines for AI-assisted development
+### Deploy n8n (Development)
+
+```bash
+# 1. Create GCS backend and secrets
+gcloud storage buckets create gs://myorg-tfstate-dev --project=development
+echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-dev-encryption-key --data-file=- --project=development
+
+# 2. Deploy infrastructure
+cd n8n/
+terraform workspace new dev
+terraform init -backend-config="bucket=myorg-tfstate-dev"
+terraform apply -var-file=environments/dev.tfvars
+
+# 3. Access n8n
+kubectl get svc -n $(terraform output -raw namespace)
+```
+
+**For detailed instructions:** See [n8n Deployment Guide](n8n/DEPLOYMENT.md)
+
+## Architecture
+
+The n8n deployment supports **3 isolated environments** (dev/staging/production):
+
+```
+GCP Organization
+├── development     → State: gs://myorg-tfstate-dev/n8n/
+├── staging         → State: gs://myorg-tfstate-staging/n8n/
+└── production      → State: gs://myorg-tfstate-production/n8n/
+```
+
+**Key features:**
+- Separate GCP projects per environment
+- GCS backend for state management
+- Terraform workspaces for organization
+- Non-overlapping CIDR ranges (10.10.x, 10.20.x, 10.30.x)
+- Dynamic resource naming: `{org}-n8n-{env}-{resource}`
 
 ## Technology Stack
 
-| Component | Technology |
-|-----------|------------|
-| IaC | Terraform >= 1.5.0 |
-| Cloud Provider | Google Cloud Platform |
-| Container Orchestration | Google Kubernetes Engine (GKE) |
-| Database | Cloud SQL (PostgreSQL 15) |
-| Secrets Management | GCP Secret Manager + External Secrets Operator |
-| Application | n8n (community Helm chart) |
-
-## Getting Started
-
-### Prerequisites
-
-- GCP project with billing enabled
-- `gcloud` CLI authenticated
-- Terraform >= 1.5.0
-- kubectl
-
-### Deploy n8n
-
-See the [n8n README](n8n/README.md) for complete deployment instructions.
-
-```bash
-cd n8n/
-terraform init
-terraform apply
-```
-
-## Repository Structure
-
-```
-terraform-gcp/
-├── README.md                 # This file
-├── claude.md                 # Project documentation
-├── learn/                    # Learning/sandbox config
-│   └── main.tf
-└── n8n/                      # Production n8n deployment
-    ├── README.md             # Deployment guide with diagrams
-    ├── AGENTS.md             # AI agent guidelines
-    ├── variables.tf
-    ├── providers.tf
-    ├── apis.tf
-    ├── network_gke.tf
-    ├── gke.tf
-    ├── k8s_providers.tf
-    ├── cloudsql.tf
-    ├── external_secrets.tf
-    ├── n8n.tf
-    └── outputs.tf
-```
+| Component | Technology | Version |
+|-----------|------------|---------|
+| Infrastructure | Terraform | ≥ 1.5.0 |
+| Cloud Provider | Google Cloud Platform | - |
+| Orchestration | Google Kubernetes Engine | - |
+| Database | Cloud SQL PostgreSQL | 15 |
+| Secrets | Secret Manager + External Secrets Operator | 0.9.13 |
+| Application | n8n (Helm chart) | 1.16.25 |
 
 ## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [claude.md](claude.md) | Comprehensive project documentation including tech stack, deployment steps, variables, and conventions |
-| [n8n/README.md](n8n/README.md) | Detailed n8n deployment guide with Mermaid architecture diagrams |
-| [n8n/AGENTS.md](n8n/AGENTS.md) | Guidelines for AI agents working with this codebase |
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| **[CLAUDE.md](CLAUDE.md)** | Technical reference for AI assistants and developers | Comprehensive architecture, patterns, troubleshooting |
+| **[n8n/README.md](n8n/README.md)** | n8n quick start and architecture diagrams | Getting started quickly |
+| **[n8n/DEPLOYMENT.md](n8n/DEPLOYMENT.md)** | Complete multi-environment deployment guide | Production deployments |
+| **[n8n/environments/README.md](n8n/environments/README.md)** | Environment configuration details | Environment customization |
+
+## Prerequisites
+
+- GCP project with billing enabled
+- `gcloud` CLI authenticated: `gcloud auth application-default login`
+- Terraform ≥ 1.5.0: [Download](https://www.terraform.io/downloads)
+- kubectl + `gke-gcloud-auth-plugin`: `gcloud components install kubectl gke-gcloud-auth-plugin`
+
+## Key Patterns
+
+### Multi-Environment Strategy
+- **Workspaces:** One per environment (dev/staging/production)
+- **State isolation:** Separate GCS buckets per environment
+- **Project isolation:** Each environment in its own GCP project
+- **CIDR allocation:** Non-overlapping for future VPC peering
+
+### Security
+- **Zero secrets in state:** All secrets in GCP Secret Manager
+- **Workload Identity:** No service account keys
+- **Private networking:** Cloud SQL accessible via private IP only
+- **Least privilege IAM:** Minimal role assignments
+
+### Resource Organization
+```
+n8n/
+├── providers.tf          # Versions + GCS backend
+├── variables.tf          # Inputs + dynamic locals
+├── environments/         # Per-environment tfvars
+│   ├── dev.tfvars
+│   ├── staging.tfvars
+│   └── production.tfvars
+├── apis.tf              # API enablement
+├── network_gke.tf       # VPC + Private Service Access
+├── gke.tf               # Cluster + node pools
+├── cloudsql.tf          # PostgreSQL + auto password
+├── k8s_providers.tf     # K8s provider wiring
+├── external_secrets.tf  # ESO + Workload Identity
+├── n8n.tf               # n8n Helm deployment
+└── outputs.tf           # Cluster/DB metadata
+```
+
+## Common Commands
+
+```bash
+# Format and validate
+terraform fmt -recursive
+terraform validate
+
+# Deploy to environment
+terraform workspace select dev
+terraform plan -var-file=environments/dev.tfvars -out=tfplan-dev
+terraform apply tfplan-dev
+
+# Get cluster credentials
+gcloud container clusters get-credentials $(terraform output -raw cluster_name) \
+  --zone $(terraform output -raw zone) --project $(terraform output -raw project_id)
+
+# Check deployment status
+kubectl get pods -n $(terraform output -raw namespace)
+kubectl get externalsecret -n $(terraform output -raw namespace)
+```
+
+## Troubleshooting
+
+**Quick diagnostic:**
+```bash
+# Check all components
+kubectl get pods,svc,externalsecret -n $(terraform output -raw namespace)
+
+# View n8n logs
+kubectl logs -n $(terraform output -raw namespace) -l app.kubernetes.io/name=n8n --tail=50
+
+# Check External Secrets sync
+kubectl describe externalsecret n8n-keys -n $(terraform output -raw namespace)
+```
+
+**Common issues:**
+- **Database authentication errors:** Check Cloud SQL user exists
+- **ExternalSecret not syncing:** Verify Workload Identity binding (wait 60s)
+- **kubectl plugin error:** Install `gke-gcloud-auth-plugin`
+
+See [CLAUDE.md](CLAUDE.md#troubleshooting) for detailed troubleshooting.
+
+## Support
+
+- **Architecture questions:** See [CLAUDE.md](CLAUDE.md)
+- **Deployment help:** See [n8n/DEPLOYMENT.md](n8n/DEPLOYMENT.md)
+- **Issues:** Check troubleshooting sections in documentation above
 
 ## License
 
-This project is for internal use.
+Internal use only.
