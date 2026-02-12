@@ -24,7 +24,7 @@ variable "environment" {
 
 variable "org_prefix" {
   type        = string
-  description = "Org prefix for naming (e.g., 'myorg')"
+  description = "Org prefix for naming (e.g., 'yesgaming')"
   default     = ""
 }
 

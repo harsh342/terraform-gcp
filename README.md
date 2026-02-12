@@ -15,14 +15,16 @@ This repository contains the following Terraform configuration:
 ### Deploy n8n (Development)
 
 ```bash
-# 1. Create GCS backend and secrets
-gcloud storage buckets create gs://myorg-tfstate-dev --project=development
-echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-dev-encryption-key --data-file=- --project=development
+# 1. Create GCS backend and secrets (see n8n/DEPLOYMENT.md for full steps)
+gcloud storage buckets create gs://yesgaming-tfstate-dev \
+  --project=yesgaming-nonprod --location=europe-north1 --uniform-bucket-level-access
+echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-dev-encryption-key \
+  --data-file=- --project=yesgaming-nonprod --replication-policy="automatic"
 
 # 2. Deploy infrastructure
 cd n8n/
 terraform workspace new dev
-terraform init -backend-config="bucket=myorg-tfstate-dev"
+terraform init -backend-config="bucket=yesgaming-tfstate-dev"
 terraform apply -var-file=environments/dev.tfvars
 
 # 3. Access n8n
@@ -37,17 +39,19 @@ The n8n deployment supports **3 isolated environments** (dev/staging/production)
 
 ```
 GCP Organization
-├── development     → State: gs://myorg-tfstate-dev/n8n/
-├── staging         → State: gs://myorg-tfstate-staging/n8n/
-└── production      → State: gs://myorg-tfstate-production/n8n/
+├── yesgaming-nonprod
+│   ├── dev         → State: gs://yesgaming-tfstate-dev/n8n/
+│   └── staging     → State: gs://yesgaming-tfstate-staging/n8n/
+└── boxwood-coil-484213-r6
+    └── production  → State: gs://yesgaming-tfstate-production/n8n/
 ```
 
 **Key features:**
-- Separate GCP projects per environment
+- Separate GCP projects (dev/staging share `yesgaming-nonprod`, production uses `boxwood-coil-484213-r6`)
 - GCS backend for state management
 - Terraform workspaces for organization
 - Non-overlapping CIDR ranges (10.10.x, 10.20.x, 10.30.x)
-- Dynamic resource naming: `{org}-n8n-{env}-{resource}`
+- Dynamic resource naming: `yesgaming-n8n-{env}-{resource}`
 
 ## Technology Stack
 

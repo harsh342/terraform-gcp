@@ -6,90 +6,151 @@ This guide walks through deploying n8n infrastructure across multiple environmen
 
 ```
 GCP Organization
-├── development (project)
-│   ├── State: gs://myorg-tfstate-dev/n8n/
-│   ├── Network: 10.10.0.0/16
-│   └── Resources: myorg-n8n-dev-*
-├── staging (project)
-│   ├── State: gs://myorg-tfstate-staging/n8n/
-│   ├── Network: 10.20.0.0/16
-│   └── Resources: myorg-n8n-staging-*
-└── production (project)
-    ├── State: gs://myorg-tfstate-production/n8n/
-    ├── Network: 10.30.0.0/16
-    └── Resources: myorg-n8n-production-*
+├── yesgaming-nonprod (project)
+│   ├── Dev State:     gs://yesgaming-tfstate-dev/n8n/
+│   ├── Dev Network:   10.10.0.0/16
+│   ├── Dev Resources: yesgaming-n8n-dev-*
+│   ├── Staging State:     gs://yesgaming-tfstate-staging/n8n/
+│   ├── Staging Network:   10.20.0.0/16
+│   └── Staging Resources: yesgaming-n8n-staging-*
+└── boxwood-coil-484213-r6 (project)
+    ├── State:     gs://yesgaming-tfstate-production/n8n/
+    ├── Network:   10.30.0.0/16
+    └── Resources: yesgaming-n8n-production-*
 ```
+
+> **Note:** Dev and staging share the `yesgaming-nonprod` project. Production uses a separate project (`boxwood-coil-484213-r6`).
 
 ## Prerequisites
 
-### 1. GCP Setup
+### 1. Tools
 
-Authenticate and install required components:
+- Terraform >= 1.5.0
+- `gcloud` CLI authenticated
+- kubectl + GKE auth plugin
 
 ```sh
 gcloud auth application-default login
-gcloud components install gke-gcloud-auth-plugin
+gcloud components install kubectl gke-gcloud-auth-plugin
 ```
 
-### 2. Per-Environment Setup
+### 2. Enable GCP APIs
 
-Repeat these steps for each environment (dev, staging, production):
+APIs must be enabled in each GCP project before Terraform can create resources.
 
-#### Create GCS Backend Bucket
+**For yesgaming-nonprod (dev + staging):**
 
 ```sh
-# Development
-gcloud storage buckets create gs://myorg-tfstate-dev \
-  --project=development \
+gcloud services enable \
+  compute.googleapis.com \
+  container.googleapis.com \
+  sqladmin.googleapis.com \
+  secretmanager.googleapis.com \
+  servicenetworking.googleapis.com \
+  iam.googleapis.com \
+  --project=yesgaming-nonprod
+```
+
+**For boxwood-coil-484213-r6 (production):**
+
+```sh
+gcloud services enable \
+  compute.googleapis.com \
+  container.googleapis.com \
+  sqladmin.googleapis.com \
+  secretmanager.googleapis.com \
+  servicenetworking.googleapis.com \
+  iam.googleapis.com \
+  --project=boxwood-coil-484213-r6
+```
+
+### 3. Create GCS Backend Buckets
+
+Each environment needs a separate GCS bucket for Terraform state storage.
+
+```sh
+# Dev
+gcloud storage buckets create gs://yesgaming-tfstate-dev \
+  --project=yesgaming-nonprod \
   --location=europe-north1 \
   --uniform-bucket-level-access
-
-gcloud storage buckets update gs://myorg-tfstate-dev --versioning
+gcloud storage buckets update gs://yesgaming-tfstate-dev --versioning
 
 # Staging
-gcloud storage buckets create gs://myorg-tfstate-staging \
-  --project=staging \
+gcloud storage buckets create gs://yesgaming-tfstate-staging \
+  --project=yesgaming-nonprod \
   --location=europe-north1 \
   --uniform-bucket-level-access
-
-gcloud storage buckets update gs://myorg-tfstate-staging --versioning
+gcloud storage buckets update gs://yesgaming-tfstate-staging --versioning
 
 # Production
-gcloud storage buckets create gs://myorg-tfstate-production \
-  --project=production \
+gcloud storage buckets create gs://yesgaming-tfstate-production \
+  --project=boxwood-coil-484213-r6 \
   --location=europe-north1 \
   --uniform-bucket-level-access
-
-gcloud storage buckets update gs://myorg-tfstate-production --versioning
+gcloud storage buckets update gs://yesgaming-tfstate-production --versioning
 ```
 
-#### Create Secrets in Secret Manager
+### 4. Create Secrets in Secret Manager
+
+Each environment needs an encryption key and a database password placeholder in Secret Manager. Terraform generates the actual DB password and updates the secret.
+
+**Dev secrets (yesgaming-nonprod):**
 
 ```sh
-# Development
 echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-dev-encryption-key \
-  --data-file=- --project=development
+  --data-file=- \
+  --project=yesgaming-nonprod \
+  --replication-policy="automatic"
 
-echo -n "your-secure-password" | gcloud secrets create n8n-dev-db-password \
-  --data-file=- --project=development
-
-# Staging
-echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-staging-encryption-key \
-  --data-file=- --project=staging
-
-echo -n "your-secure-password" | gcloud secrets create n8n-staging-db-password \
-  --data-file=- --project=staging
-
-# Production
-echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-production-encryption-key \
-  --data-file=- --project=production
-
-echo -n "your-secure-password" | gcloud secrets create n8n-production-db-password \
-  --data-file=- --project=production
-
-echo -n "your-license-key" | gcloud secrets create n8n-production-license \
-  --data-file=- --project=production
+echo -n "placeholder" | gcloud secrets create n8n-dev-db-password \
+  --data-file=- \
+  --project=yesgaming-nonprod \
+  --replication-policy="automatic"
 ```
+
+**Staging secrets (yesgaming-nonprod):**
+
+```sh
+echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-staging-encryption-key \
+  --data-file=- \
+  --project=yesgaming-nonprod \
+  --replication-policy="automatic"
+
+echo -n "placeholder" | gcloud secrets create n8n-staging-db-password \
+  --data-file=- \
+  --project=yesgaming-nonprod \
+  --replication-policy="automatic"
+```
+
+**Production secrets (boxwood-coil-484213-r6):**
+
+```sh
+echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-production-encryption-key \
+  --data-file=- \
+  --project=boxwood-coil-484213-r6 \
+  --replication-policy="automatic"
+
+echo -n "placeholder" | gcloud secrets create n8n-production-db-password \
+  --data-file=- \
+  --project=boxwood-coil-484213-r6 \
+  --replication-policy="automatic"
+
+# Optional: n8n license key (only if you have one)
+echo -n "your-license-key" | gcloud secrets create n8n-production-license \
+  --data-file=- \
+  --project=boxwood-coil-484213-r6 \
+  --replication-policy="automatic"
+```
+
+**Verify secrets were created:**
+
+```sh
+gcloud secrets list --project=yesgaming-nonprod --filter="name:n8n-"
+gcloud secrets list --project=boxwood-coil-484213-r6 --filter="name:n8n-"
+```
+
+> **Note:** The `n8n-*-db-password` secrets are created with a `placeholder` value. Terraform generates a random 32-character password, creates the Cloud SQL user, and updates the secret with the real password on first `terraform apply`.
 
 ## Deployment Steps
 
@@ -98,13 +159,15 @@ echo -n "your-license-key" | gcloud secrets create n8n-production-license \
 ```sh
 cd n8n/
 
-# Create workspace
+# Create workspace (first time only)
 terraform workspace new dev
 
 # Initialize with dev backend
-terraform init -backend-config="bucket=myorg-tfstate-dev"
+terraform init -backend-config="bucket=yesgaming-tfstate-dev"
 
-# Plan
+# Validate and plan
+terraform fmt -recursive
+terraform validate
 terraform plan -var-file=environments/dev.tfvars -out=tfplan-dev
 
 # Apply
@@ -123,16 +186,14 @@ kubectl get svc -n $(terraform output -raw namespace)
 ### Deploy Staging Environment
 
 ```sh
-# Switch workspace
+# Create workspace (first time only)
 terraform workspace new staging
 
-# Reconfigure backend for staging
-terraform init -backend-config="bucket=myorg-tfstate-staging" -reconfigure
+# Reconfigure backend for staging (same project, different bucket)
+terraform init -backend-config="bucket=yesgaming-tfstate-staging" -reconfigure
 
-# Plan
+# Plan and apply
 terraform plan -var-file=environments/staging.tfvars -out=tfplan-staging
-
-# Apply
 terraform apply tfplan-staging
 
 # Get cluster credentials
@@ -147,16 +208,15 @@ kubectl get pods -n $(terraform output -raw namespace)
 ### Deploy Production Environment
 
 ```sh
-# Switch workspace
+# Create workspace (first time only)
 terraform workspace new production
 
-# Reconfigure backend for production
-terraform init -backend-config="bucket=myorg-tfstate-production" -reconfigure
+# Reconfigure backend for production (different project + bucket)
+terraform init -backend-config="bucket=yesgaming-tfstate-production" -reconfigure
 
-# Plan
+# Plan — review carefully before applying!
 terraform plan -var-file=environments/production.tfvars -out=tfplan-production
 
-# Review plan carefully!
 # Apply
 terraform apply tfplan-production
 
@@ -169,6 +229,12 @@ gcloud container clusters get-credentials $(terraform output -raw cluster_name) 
 kubectl get pods -n $(terraform output -raw namespace)
 ```
 
+**Production checklist (before applying):**
+- [ ] Review all settings in `environments/production.tfvars`
+- [ ] Verify `cloudsql_deletion_protection = true`
+- [ ] Confirm correct project ID (`boxwood-coil-484213-r6`)
+- [ ] Plan output shows expected resources
+
 ## Switching Between Environments
 
 ```sh
@@ -178,28 +244,34 @@ terraform workspace list
 # Switch to a different environment
 terraform workspace select dev
 
-# Reconfigure backend (if needed)
-terraform init -backend-config="bucket=myorg-tfstate-dev" -reconfigure
+# Reconfigure backend (required when switching)
+terraform init -backend-config="bucket=yesgaming-tfstate-dev" -reconfigure
 
-# Now you can run commands against the dev environment
+# Now operate on dev
 terraform plan -var-file=environments/dev.tfvars
 ```
+
+> **Always verify before applying:**
+> ```sh
+> terraform workspace show       # Should match intended environment
+> terraform output environment   # Should match workspace
+> terraform output project_id    # Should be correct project
+> ```
 
 ## Verification
 
 ### Check Terraform Outputs
 
 ```sh
-terraform output environment  # Should show: dev/staging/production
+terraform output environment  # dev/staging/production
 terraform output workspace    # Should match environment
-terraform output namespace    # Should show: n8n-{environment}
-terraform output cluster_name # Should show: {org}-n8n-{env}-gke
+terraform output namespace    # n8n-{environment}
+terraform output cluster_name # yesgaming-n8n-{env}-gke
 ```
 
 ### Check Kubernetes Resources
 
 ```sh
-# Get namespace
 NAMESPACE=$(terraform output -raw namespace)
 
 # Check pods
@@ -219,13 +291,11 @@ kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=n8n --tail=50
 ### Check n8n Access
 
 ```sh
-# For LoadBalancer (dev environment)
+# For LoadBalancer (dev — no n8n_host set)
 kubectl get svc -n $NAMESPACE n8n
+# Wait for EXTERNAL-IP, then access: http://<EXTERNAL-IP>:5678
 
-# Wait for EXTERNAL-IP to be assigned, then access:
-# http://<EXTERNAL-IP>:5678
-
-# For Ingress (staging/production)
+# For Ingress (staging/production — n8n_host set)
 kubectl get ingress -n $NAMESPACE
 ```
 
@@ -258,7 +328,6 @@ terraform state show google_container_cluster.gke
 
 ```sh
 # CAUTION: This will delete all resources!
-
 terraform workspace select dev
 terraform destroy -var-file=environments/dev.tfvars
 ```
@@ -275,15 +344,29 @@ kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=n8n --tail=50
 kubectl describe pod -n $NAMESPACE -l app.kubernetes.io/name=n8n
 ```
 
+**"password authentication failed"** — verify the Cloud SQL user and password:
+
+```sh
+# Check if Cloud SQL user exists
+gcloud sql users list \
+  --instance=$(terraform output -raw cloudsql_instance_name) \
+  --project=$(terraform output -raw project_id)
+
+# Verify password in Secret Manager (replace {environment} with dev/staging/production)
+gcloud secrets versions access latest \
+  --secret=n8n-{environment}-db-password \
+  --project=$(terraform output -raw project_id)
+```
+
 ### External Secrets Not Syncing
 
 ```sh
 NAMESPACE=$(terraform output -raw namespace)
 
-# Check SecretStore
+# Check SecretStore (should show "Valid")
 kubectl get secretstore -n $NAMESPACE -o yaml
 
-# Check ExternalSecret
+# Check ExternalSecret (should show "SecretSynced")
 kubectl describe externalsecret n8n-keys -n $NAMESPACE
 
 # Check ESO logs
@@ -304,28 +387,28 @@ terraform output project_id
 
 # If wrong, switch workspace and reconfigure
 terraform workspace select <correct-env>
-terraform init -backend-config="bucket=myorg-tfstate-<correct-env>" -reconfigure
+terraform init -backend-config="bucket=yesgaming-tfstate-<correct-env>" -reconfigure
 ```
 
 ## Best Practices
 
-1. **Always use workspaces** - Each environment gets its own workspace
-2. **Always use -var-file** - Never hardcode environment values
-3. **Always run plan first** - Review changes before applying
-4. **Use plan output files** - Ensures what you reviewed is what gets applied
-5. **Name plan files by environment** - `tfplan-dev`, `tfplan-staging`, etc.
-6. **Verify workspace before applying** - Run `terraform workspace show`
-7. **Keep state in GCS** - Never commit state files to git
-8. **Version your backend buckets** - Enables rollback if needed
-9. **Separate GCP projects** - Isolates environments completely
-10. **Use different CIDR ranges** - Enables VPC peering if needed later
+1. **Always use workspaces** — Each environment gets its own workspace
+2. **Always use -var-file** — Never hardcode environment values
+3. **Always run plan first** — Review changes before applying
+4. **Use plan output files** — Ensures what you reviewed is what gets applied
+5. **Name plan files by environment** — `tfplan-dev`, `tfplan-staging`, etc.
+6. **Verify workspace before applying** — Run `terraform workspace show`
+7. **Keep state in GCS** — Never commit state files to git
+8. **Version your backend buckets** — Enables rollback if needed
+9. **Separate GCP projects** — Isolates environments completely
+10. **Use different CIDR ranges** — Enables VPC peering if needed later
 
 ## Security Notes
 
 - **Never commit** `.tfstate` files or `.auto.tfvars` files
-- **Secrets live in Secret Manager** - Never in Terraform state or code
-- **Use Workload Identity** - No service account keys needed
-- **Enable deletion protection** - On staging and production Cloud SQL
-- **Review plans carefully** - Especially for production changes
-- **Limit access to GCS buckets** - Only authorized users/service accounts
-- **Rotate secrets regularly** - Update in Secret Manager, ESO syncs automatically
+- **Secrets live in Secret Manager** — Never in Terraform state or code
+- **Use Workload Identity** — No service account keys needed
+- **Enable deletion protection** — On staging and production Cloud SQL
+- **Review plans carefully** — Especially for production changes
+- **Limit access to GCS buckets** — Only authorized users/service accounts
+- **Rotate secrets regularly** — Update in Secret Manager, ESO syncs automatically

@@ -9,9 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Multi-Environment Architecture
 
 The n8n deployment supports 3 isolated environments (dev/staging/production) with:
-- **State storage:** Separate GCS buckets per environment (`gs://myorg-tfstate-{env}/n8n/`)
+- **State storage:** Separate GCS buckets per environment (`gs://{org_prefix}-tfstate-{env}/n8n/`)
 - **Terraform workspaces:** One workspace per environment
-- **GCP projects:** Each environment in its own project
+- **GCP projects:** dev and staging share `yesgaming-nonprod`; production uses `boxwood-coil-484213-r6`
 - **CIDR allocation:** Non-overlapping ranges to enable future VPC peering
 
 | Environment | Subnet | Pods | Services | Node Type | Node Count | SQL Tier |
@@ -21,7 +21,7 @@ The n8n deployment supports 3 isolated environments (dev/staging/production) wit
 | production | 10.30.0.0/16 | 10.31.0.0/16 | 10.32.0.0/20 | e2-standard-4 | 2 | db-custom-4-15360 |
 
 **Naming convention:** Resources follow `{org_prefix}-n8n-{environment}-{resource}` pattern
-- Example: `myorg-n8n-dev-gke`, `myorg-n8n-production-postgres`
+- Example: `yesgaming-n8n-dev-gke`, `yesgaming-n8n-production-postgres`
 - K8s namespace: `n8n-{environment}`
 
 **Dynamic naming via locals:**
@@ -89,27 +89,16 @@ Files are grouped by infrastructure concern:
 | `n8n.tf` | n8n namespace + Helm deployment | Depends on secrets + Cloud SQL user |
 | `outputs.tf` | Cluster/DB info + environment metadata | `environment`, `workspace`, `namespace` |
 | `environments/*.tfvars` | Per-environment variable values | No sensitive data |
-
 ## Common Commands
 
 ### Initial Setup (per environment)
 
-```sh
-# 1. Create GCS backend bucket
-gcloud storage buckets create gs://myorg-tfstate-dev \
-  --project=development --location=europe-north1 --uniform-bucket-level-access
-gcloud storage buckets update gs://myorg-tfstate-dev --versioning
+See [DEPLOYMENT.md](n8n/DEPLOYMENT.md) for full step-by-step instructions. Summary of prerequisites before `terraform apply`:
 
-# 2. Create secrets in Secret Manager
-echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-dev-encryption-key \
-  --data-file=- --project=development
-echo -n "your-password" | gcloud secrets create n8n-dev-db-password \
-  --data-file=- --project=development
-
-# 3. Authenticate gcloud
-gcloud auth application-default login
-gcloud components install gke-gcloud-auth-plugin
-```
+1. **Authenticate:** `gcloud auth application-default login && gcloud components install gke-gcloud-auth-plugin`
+2. **Enable APIs:** `gcloud services enable compute.googleapis.com container.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com servicenetworking.googleapis.com iam.googleapis.com --project=<PROJECT_ID>`
+3. **Create GCS bucket:** `gcloud storage buckets create gs://yesgaming-tfstate-{env} --project=<PROJECT_ID> --location=europe-north1 --uniform-bucket-level-access` + enable versioning
+4. **Create secrets:** encryption key (`openssl rand -hex 32`) + db-password placeholder in Secret Manager with `--replication-policy="automatic"`
 
 ### Deploy to Environment
 
@@ -120,7 +109,7 @@ cd n8n/
 terraform workspace new dev
 
 # Initialize with GCS backend
-terraform init -backend-config="bucket=myorg-tfstate-dev"
+terraform init -backend-config="bucket=yesgaming-tfstate-dev"
 
 # Standard workflow
 terraform fmt -recursive
@@ -148,7 +137,7 @@ terraform workspace list
 terraform workspace select staging
 
 # Reconfigure backend (required when switching projects)
-terraform init -backend-config="bucket=myorg-tfstate-staging" -reconfigure
+terraform init -backend-config="bucket=yesgaming-tfstate-staging" -reconfigure
 
 # Now operate on staging
 terraform plan -var-file=environments/staging.tfvars
@@ -201,8 +190,8 @@ Terraform generates a random password, creates the Cloud SQL user, and stores th
 gcloud sql users list --instance=$(terraform output -raw cloudsql_instance_name) \
   --project=$(terraform output -raw project_id)
 
-# Verify password matches Secret Manager
-gcloud secrets versions access latest --secret=$(terraform output -raw n8n_db_password_secret_name) \
+# Verify password in Secret Manager (use the secret name from your tfvars)
+gcloud secrets versions access latest --secret=n8n-{environment}-db-password \
   --project=$(terraform output -raw project_id)
 
 # Check n8n logs
@@ -254,13 +243,14 @@ terraform output namespace         # Should be n8n-{environment}
 - **Private Service Access:** `google_service_networking_connection` in `network_gke.tf` is required for Cloud SQL private IP. Don't remove.
 - **CIDR ranges are parameterized:** Use `var.subnet_cidr`, `var.pods_cidr`, `var.services_cidr` (not hardcoded).
 - **Resource naming is dynamic:** Uses `local.name_prefix` and `local.namespace` computed from `var.environment` and `var.org_prefix`.
+- **`.tfvars` files are gitignored at root** but tracked under `n8n/environments/` via the n8n-level `.gitignore` which only ignores `environments/*.auto.tfvars` and `environments/local.tfvars`.
 
 ## Coding Conventions
 
 - 2-space indentation, `snake_case` naming
 - Block comments (`/* */`) at file headers
 - Resources grouped by concern in separate files (not monolithic)
-- Pin provider versions in `providers.tf` for reproducibility
+- Pin provider versions in `providers.tf` for reproducibility (currently: google 6.8.0, kubernetes 3.0.1, helm 2.12.1, kubectl 1.19.0, random 3.8.1)
 - Use `depends_on` explicitly for Workload Identity and cross-provider dependencies
 - Add `common_labels` to all GCP resources for environment tracking
 - Use `local.name_prefix` for resource names, `local.namespace` for K8s namespace

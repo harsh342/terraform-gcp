@@ -35,7 +35,7 @@ terraform {
   }
 
   backend "gcs" {
-    # Bucket specified during init: terraform init -backend-config="bucket=myorg-tfstate-dev"
+    # Bucket specified during init: terraform init -backend-config="bucket=yesgaming-tfstate-dev"
     prefix = "n8n"
   }
 }

@@ -39,18 +39,28 @@ terraform apply tfplan-production
 | Pods CIDR | 10.11.0.0/16 | 10.21.0.0/16 | 10.31.0.0/16 |
 | Services CIDR | 10.12.0.0/20 | 10.22.0.0/20 | 10.32.0.0/20 |
 
+## Project Mapping
+
+| Environment | GCP Project | GCS State Bucket |
+|-------------|-------------|------------------|
+| dev | `yesgaming-nonprod` | `yesgaming-tfstate-dev` |
+| staging | `yesgaming-nonprod` | `yesgaming-tfstate-staging` |
+| production | `boxwood-coil-484213-r6` | `yesgaming-tfstate-production` |
+
+> Dev and staging share the same GCP project (`yesgaming-nonprod`). Production uses a separate project.
+
 ## Customization
 
-Before deploying, update these values in each tfvars file:
+Key values to review in each tfvars file:
 
-1. `org_prefix` - Your organization prefix (replaces "myorg")
-2. `project_id` - Your actual GCP project ID
-3. `n8n_host` - Your domain name for n8n (if using ingress)
-4. Secret names - Must match secrets created in GCP Secret Manager
+1. `n8n_host` - Your domain name for n8n (empty = LoadBalancer, set = Ingress)
+2. `node_machine_type` / `node_count` - Adjust compute capacity
+3. `cloudsql_tier` / `cloudsql_disk_size_gb` - Adjust database capacity
+4. Secret names - Must match secrets created in GCP Secret Manager (see [DEPLOYMENT.md](../DEPLOYMENT.md#4-create-secrets-in-secret-manager))
 
 ## Important Notes
 
 - **Do not commit** files matching `*.auto.tfvars` or `local.tfvars` - these are in .gitignore
 - Each environment requires its own GCS backend bucket for state storage
-- Secrets must be created in GCP Secret Manager before deployment
+- Secrets must be created in GCP Secret Manager before deployment (see [DEPLOYMENT.md](../DEPLOYMENT.md))
 - CIDR ranges are non-overlapping to allow future VPC peering if needed

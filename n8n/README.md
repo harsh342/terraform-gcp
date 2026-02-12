@@ -88,10 +88,12 @@ kubectl get svc -n n8n
 For production use, deploy across isolated environments:
 
 ```
-Organization
-├── dev         → gs://myorg-tfstate-dev/n8n/
-├── staging     → gs://myorg-tfstate-staging/n8n/
-└── production  → gs://myorg-tfstate-production/n8n/
+yesgaming-nonprod (project)
+├── dev         → gs://yesgaming-tfstate-dev/n8n/
+└── staging     → gs://yesgaming-tfstate-staging/n8n/
+
+boxwood-coil-484213-r6 (project)
+└── production  → gs://yesgaming-tfstate-production/n8n/
 ```
 
 **Key differences per environment:**
@@ -105,7 +107,7 @@ Organization
 **Deploy to environment:**
 ```bash
 terraform workspace new dev
-terraform init -backend-config="bucket=myorg-tfstate-dev"
+terraform init -backend-config="bucket=yesgaming-tfstate-dev"
 terraform apply -var-file=environments/dev.tfvars
 ```
 
