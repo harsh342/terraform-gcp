@@ -18,6 +18,25 @@ resource "kubernetes_namespace_v1" "n8n" {
   depends_on = [google_container_node_pool.primary]
 }
 
+# Google-managed TLS certificate for HTTPS ingress
+resource "kubectl_manifest" "n8n_managed_cert" {
+  count = var.n8n_host != "" ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "networking.gke.io/v1"
+    kind       = "ManagedCertificate"
+    metadata = {
+      name      = "${local.name_prefix}-cert"
+      namespace = kubernetes_namespace_v1.n8n.metadata[0].name
+    }
+    spec = {
+      domains = [var.n8n_host]
+    }
+  })
+
+  depends_on = [kubernetes_namespace_v1.n8n]
+}
+
 resource "helm_release" "n8n" {
   name       = "n8n"
   namespace  = kubernetes_namespace_v1.n8n.metadata[0].name
@@ -53,13 +72,18 @@ resource "helm_release" "n8n" {
       enabled = false
     }
 
-    # Extra environment variables for HTTP access
-    extraEnvVars = {
-      # Allow HTTP access (disable HTTPS requirement for dev/testing)
-      N8N_SECURE_COOKIE = "false"
-      # Disable SSL for webhook URLs
-      N8N_PROTOCOL = "http"
-    }
+    # Extra environment variables for protocol and webhook URL
+    extraEnvVars = merge(
+      {
+        N8N_PROTOCOL      = var.n8n_host != "" ? "https" : "http"
+        N8N_SECURE_COOKIE = var.n8n_host != "" ? "true" : "false"
+      },
+      # Set WEBHOOK_URL and N8N_EDITOR_BASE_URL so n8n generates correct webhook/editor URLs
+      local.webhook_url != "" ? {
+        WEBHOOK_URL         = "${local.webhook_url}/"
+        N8N_EDITOR_BASE_URL = local.webhook_url
+      } : {}
+    )
 
     # Service configuration
     service = {
@@ -68,21 +92,61 @@ resource "helm_release" "n8n" {
       port    = 5678
     }
 
-    # Ingress configuration
+    # Ingress disabled — managed separately via kubectl_manifest to set defaultBackend
+    # (GKE's default-http-backend NEG may be missing, causing sync errors)
     ingress = {
-      enabled   = var.n8n_host != ""
-      className = "gce"
-      hosts = var.n8n_host != "" ? [{
-        host  = var.n8n_host
-        paths = [{ path = "/", pathType = "Prefix" }]
-      }] : []
+      enabled = false
     }
   })]
 
   depends_on = [
     kubectl_manifest.n8n_keys,
     kubectl_manifest.n8n_db,
+    kubectl_manifest.n8n_managed_cert,
     time_sleep.wait_for_secrets,
     google_sql_user.n8n
   ]
+}
+
+# Ingress managed outside Helm to set defaultBackend and avoid broken system default backend NEG
+resource "kubectl_manifest" "n8n_ingress" {
+  count = var.n8n_host != "" ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "networking.k8s.io/v1"
+    kind       = "Ingress"
+    metadata = {
+      name      = "n8n"
+      namespace = kubernetes_namespace_v1.n8n.metadata[0].name
+      annotations = {
+        "kubernetes.io/ingress.class"            = "gce"
+        "networking.gke.io/managed-certificates" = "${local.name_prefix}-cert"
+      }
+    }
+    spec = {
+      defaultBackend = {
+        service = {
+          name = "n8n"
+          port = { number = 5678 }
+        }
+      }
+      rules = [{
+        host = var.n8n_host
+        http = {
+          paths = [{
+            path     = "/*"
+            pathType = "ImplementationSpecific"
+            backend = {
+              service = {
+                name = "n8n"
+                port = { number = 5678 }
+              }
+            }
+          }]
+        }
+      }]
+    }
+  })
+
+  depends_on = [helm_release.n8n]
 }

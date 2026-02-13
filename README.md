@@ -40,10 +40,10 @@ The n8n deployment supports **3 isolated environments** (dev/staging/production)
 ```
 GCP Organization
 ├── yesgaming-nonprod
-│   ├── dev         → State: gs://yesgaming-tfstate-dev/n8n/
-│   └── staging     → State: gs://yesgaming-tfstate-staging/n8n/
+│   ├── dev     → https://n8n-dev.theyes.cloud   → gs://yesgaming-tfstate-dev/n8n/
+│   └── staging → https://n8n-stage.theyes.cloud → gs://yesgaming-tfstate-staging/n8n/
 └── boxwood-coil-484213-r6
-    └── production  → State: gs://yesgaming-tfstate-production/n8n/
+    └── prod    → https://n8n.theyes.cloud       → gs://yesgaming-tfstate-production/n8n/
 ```
 
 **Key features:**

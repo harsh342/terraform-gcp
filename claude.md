@@ -14,11 +14,11 @@ The n8n deployment supports 3 isolated environments (dev/staging/production) wit
 - **GCP projects:** dev and staging share `yesgaming-nonprod`; production uses `boxwood-coil-484213-r6`
 - **CIDR allocation:** Non-overlapping ranges to enable future VPC peering
 
-| Environment | Subnet | Pods | Services | Node Type | Node Count | SQL Tier |
-|-------------|--------|------|----------|-----------|------------|----------|
-| dev | 10.10.0.0/16 | 10.11.0.0/16 | 10.12.0.0/20 | e2-standard-2 | 1 | db-f1-micro |
-| staging | 10.20.0.0/16 | 10.21.0.0/16 | 10.22.0.0/20 | e2-standard-2 | 1 | db-custom-2-7680 |
-| production | 10.30.0.0/16 | 10.31.0.0/16 | 10.32.0.0/20 | e2-standard-4 | 2 | db-custom-4-15360 |
+| Environment | Domain | Subnet | Pods | Services | Node Type | Node Count | SQL Tier |
+|-------------|--------|--------|------|----------|-----------|------------|----------|
+| dev | `n8n-dev.theyes.cloud` | 10.10.0.0/16 | 10.11.0.0/16 | 10.12.0.0/20 | e2-standard-2 | 1 | db-f1-micro |
+| staging | `n8n-stage.theyes.cloud` | 10.20.0.0/16 | 10.21.0.0/16 | 10.22.0.0/20 | e2-standard-2 | 1 | db-custom-2-7680 |
+| production | `n8n.theyes.cloud` | 10.30.0.0/16 | 10.31.0.0/16 | 10.32.0.0/20 | e2-standard-4 | 2 | db-custom-4-15360 |
 
 **Naming convention:** Resources follow `{org_prefix}-n8n-{environment}-{resource}` pattern
 - Example: `yesgaming-n8n-dev-gke`, `yesgaming-n8n-production-postgres`
@@ -60,6 +60,7 @@ Helm Provider → Deploy External Secrets Operator + n8n
 5. `external_secrets.tf` deploys ESO Helm chart → installs CRDs with `installCRDs: true`
 6. `external_secrets.tf` creates SecretStore + ExternalSecrets → materializes K8s secrets
 7. `n8n.tf` deploys n8n Helm chart → depends on secrets existing
+8. `n8n.tf` creates GCE Ingress + ManagedCertificate via `kubectl_manifest` → depends on Helm release
 
 **Secrets flow (zero secrets in Terraform state):**
 ```
@@ -86,7 +87,7 @@ Files are grouped by infrastructure concern:
 | `gke.tf` | GKE cluster + node pool | Adds `common_labels` |
 | `cloudsql.tf` | PostgreSQL + auto-generated password | Stores password in Secret Manager |
 | `external_secrets.tf` | ESO + Workload Identity + CRDs | Helm chart + kubectl manifests |
-| `n8n.tf` | n8n namespace + Helm deployment | Depends on secrets + Cloud SQL user |
+| `n8n.tf` | n8n namespace + Helm + Ingress + ManagedCertificate | Ingress managed via `kubectl_manifest` (not Helm) |
 | `outputs.tf` | Cluster/DB info + environment metadata | `environment`, `workspace`, `namespace` |
 | `environments/*.tfvars` | Per-environment variable values | No sensitive data |
 ## Common Commands
@@ -182,6 +183,20 @@ resource "time_sleep" "wait_for_wi" {
 ### Cloud SQL Password Management
 Terraform generates a random password, creates the Cloud SQL user, and stores the password in Secret Manager. ExternalSecrets syncs it to K8s secrets. **Important:** The password is marked `sensitive = true` in outputs.
 
+### GCE Ingress Pattern
+The Ingress is managed via `kubectl_manifest` **outside** the Helm chart (`ingress.enabled = false` in Helm values). This is required because:
+- GKE's system `default-http-backend` NEG may not exist, causing `404: networkEndpointGroups not found` sync errors
+- The `kubectl_manifest` Ingress sets an explicit `defaultBackend` pointing to the n8n service, avoiding the broken system default backend
+- Uses annotation `kubernetes.io/ingress.class: gce` (not `spec.ingressClassName`) because GKE may not register an IngressClass resource
+- Path uses `/*` with `pathType: ImplementationSpecific` (required by GCE controller)
+- ManagedCertificate CRD is linked via `networking.gke.io/managed-certificates` annotation
+
+### Cloudflare DNS Configuration (Required for Google-Managed Certificates)
+When using Cloudflare as DNS provider for `theyes.cloud` domains:
+- **DNS records must be DNS-only (gray cloud)**, not Proxied (orange cloud). Cloudflare proxy resolves to Cloudflare IPs, preventing Google from verifying domain ownership for managed certificates.
+- **No port rewrite rules** — do not create Cloudflare origin rules to rewrite ports (e.g., to 5678). The GCE load balancer handles 80/443 → backend port routing internally.
+- **Post-deploy DNS workflow:** `terraform apply` → get ingress IP (`kubectl get ingress`) → create DNS-only A record in Cloudflare → wait 10-15 min for ManagedCertificate to go "Active"
+
 ## Troubleshooting
 
 **n8n pod CrashLoopBackOff - "password authentication failed":**
@@ -225,6 +240,34 @@ kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=external-secrets
 - Look for `iam.gke.io/gcp-service-account` annotation pointing to GCP SA email
 - Wait 60s after IAM binding (handled by `time_sleep.wait_for_wi`)
 
+**GCE Ingress has no external IP:**
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+
+# Check ingress status (ADDRESS column should have an IP)
+kubectl get ingress -n $NAMESPACE
+
+# Check GCE ingress controller events for errors
+kubectl describe ingress n8n -n $NAMESPACE
+
+# Look for NEG or backend errors in events
+# Common error: "networkEndpointGroups/... was not found" → already handled by defaultBackend pattern
+```
+
+**ManagedCertificate stuck in "Provisioning":**
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+kubectl describe managedcertificate -n $NAMESPACE
+```
+- Verify DNS A record points to the ingress IP: `dig n8n-dev.theyes.cloud`
+- Verify Cloudflare DNS is set to **DNS-only (gray cloud)**, not Proxied (orange cloud)
+- Remove any Cloudflare origin rules that rewrite ports
+- Certificate provisioning takes 10-15 minutes after DNS propagates
+
+**"Dangerous site" or SSL errors after Cloudflare setup:**
+- Cloudflare proxy (orange cloud) is intercepting traffic. Switch to DNS-only (gray cloud).
+- Cloudflare port rewrite origin rules are bypassing the GCE load balancer. Remove them.
+
 **Wrong environment deployed:**
 ```sh
 # Always verify before applying
@@ -243,6 +286,8 @@ terraform output namespace         # Should be n8n-{environment}
 - **Private Service Access:** `google_service_networking_connection` in `network_gke.tf` is required for Cloud SQL private IP. Don't remove.
 - **CIDR ranges are parameterized:** Use `var.subnet_cidr`, `var.pods_cidr`, `var.services_cidr` (not hardcoded).
 - **Resource naming is dynamic:** Uses `local.name_prefix` and `local.namespace` computed from `var.environment` and `var.org_prefix`.
+- **HTTPS via Google-managed certificates:** When `n8n_host` is set, `n8n.tf` creates a `ManagedCertificate` CRD and a GCE Ingress via `kubectl_manifest`. DNS A records must point to the ingress IP (DNS-only, not proxied) for cert provisioning to succeed.
+- **Ingress managed outside Helm:** The Helm chart's ingress is disabled. Ingress is created via `kubectl_manifest` to set an explicit `defaultBackend` and avoid GKE's broken default-http-backend NEG.
 - **`.tfvars` files are gitignored at root** but tracked under `n8n/environments/` via the n8n-level `.gitignore` which only ignores `environments/*.auto.tfvars` and `environments/local.tfvars`.
 
 ## Coding Conventions

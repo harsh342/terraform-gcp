@@ -7,16 +7,10 @@ This guide walks through deploying n8n infrastructure across multiple environmen
 ```
 GCP Organization
 ├── yesgaming-nonprod (project)
-│   ├── Dev State:     gs://yesgaming-tfstate-dev/n8n/
-│   ├── Dev Network:   10.10.0.0/16
-│   ├── Dev Resources: yesgaming-n8n-dev-*
-│   ├── Staging State:     gs://yesgaming-tfstate-staging/n8n/
-│   ├── Staging Network:   10.20.0.0/16
-│   └── Staging Resources: yesgaming-n8n-staging-*
+│   ├── Dev:     https://n8n-dev.theyes.cloud   → gs://yesgaming-tfstate-dev/n8n/
+│   └── Staging: https://n8n-stage.theyes.cloud → gs://yesgaming-tfstate-staging/n8n/
 └── boxwood-coil-484213-r6 (project)
-    ├── State:     gs://yesgaming-tfstate-production/n8n/
-    ├── Network:   10.30.0.0/16
-    └── Resources: yesgaming-n8n-production-*
+    └── Prod:    https://n8n.theyes.cloud       → gs://yesgaming-tfstate-production/n8n/
 ```
 
 > **Note:** Dev and staging share the `yesgaming-nonprod` project. Production uses a separate project (`boxwood-coil-484213-r6`).
@@ -180,7 +174,7 @@ gcloud container clusters get-credentials $(terraform output -raw cluster_name) 
 
 # Verify deployment
 kubectl get pods -n $(terraform output -raw namespace)
-kubectl get svc -n $(terraform output -raw namespace)
+kubectl get ingress -n $(terraform output -raw namespace)
 ```
 
 ### Deploy Staging Environment
@@ -234,6 +228,91 @@ kubectl get pods -n $(terraform output -raw namespace)
 - [ ] Verify `cloudsql_deletion_protection = true`
 - [ ] Confirm correct project ID (`boxwood-coil-484213-r6`)
 - [ ] Plan output shows expected resources
+
+### DNS and TLS Setup (Cloudflare)
+
+After each `terraform apply`, Terraform creates a GCE Ingress and a Google-managed TLS certificate. You must configure DNS so the certificate can provision.
+
+> **Important:** The Ingress is managed via `kubectl_manifest` outside the Helm chart. This sets an explicit `defaultBackend` to avoid GKE's system default-http-backend NEG issues.
+
+**1. Get the ingress external IP:**
+
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+kubectl get ingress -n $NAMESPACE
+# Note the ADDRESS column — this is the IP for your DNS record
+# It may take 2-5 minutes for the GCE load balancer to provision an IP
+```
+
+**2. Create DNS A records in Cloudflare** (`theyes.cloud` zone):
+
+| Environment | Domain | Record Type | Value | Proxy Status |
+|-------------|--------|-------------|-------|--------------|
+| dev | `n8n-dev.theyes.cloud` | A | `<dev ingress IP>` | **DNS only (gray cloud)** |
+| staging | `n8n-stage.theyes.cloud` | A | `<staging ingress IP>` | **DNS only (gray cloud)** |
+| production | `n8n.theyes.cloud` | A | `<production ingress IP>` | **DNS only (gray cloud)** |
+
+> **CRITICAL — Cloudflare proxy must be OFF:**
+> - Set proxy status to **DNS only (gray cloud)**, NOT Proxied (orange cloud)
+> - Cloudflare proxy resolves DNS to Cloudflare IPs, which prevents Google from verifying domain ownership for the managed certificate
+> - If proxied, you will see "Dangerous site" warnings and the certificate will stay stuck in "Provisioning"
+>
+> **Do NOT create Cloudflare origin/port rewrite rules:**
+> - The GCE load balancer handles 80/443 → backend port (5678) routing internally
+> - Adding a port rewrite rule (e.g., to port 5678) bypasses the load balancer and breaks HTTPS
+
+**3. Wait for managed certificate provisioning** (10-15 minutes after DNS propagates):
+
+```sh
+# Check certificate status — should go from "Provisioning" to "Active"
+kubectl get managedcertificate -n $NAMESPACE
+
+# Detailed status
+kubectl describe managedcertificate -n $NAMESPACE
+
+# Verify DNS resolves to the ingress IP (not Cloudflare IPs)
+dig n8n-dev.theyes.cloud
+```
+
+> **Note:** The certificate will stay in `Provisioning` until Google can verify the domain resolves to the ingress IP. If it stays stuck:
+> 1. Verify the DNS A record points to the correct ingress IP
+> 2. Verify Cloudflare proxy is **OFF** (gray cloud, not orange cloud)
+> 3. Remove any Cloudflare origin rules that rewrite ports
+> 4. Wait for DNS propagation (`dig <domain>` should return the ingress IP)
+
+**4. Verify HTTPS access:**
+
+| Environment | URL |
+|-------------|-----|
+| dev | `https://n8n-dev.theyes.cloud` |
+| staging | `https://n8n-stage.theyes.cloud` |
+| production | `https://n8n.theyes.cloud` |
+
+### Post-Deploy Verification Checklist
+
+Run this after each environment deployment + DNS setup:
+
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+
+# 1. All pods should be Running
+kubectl get pods -n $NAMESPACE
+
+# 2. ExternalSecrets should show "SecretSynced"
+kubectl get externalsecret -n $NAMESPACE
+
+# 3. Ingress should have an external IP in ADDRESS column
+kubectl get ingress -n $NAMESPACE
+
+# 4. ManagedCertificate should show "Active" (takes 10-15 min after DNS)
+kubectl get managedcertificate -n $NAMESPACE
+
+# 5. DNS should resolve to the ingress IP (not Cloudflare IPs)
+dig +short $(terraform output -raw n8n_host 2>/dev/null || echo "n8n-dev.theyes.cloud")
+
+# 6. HTTPS should work (after cert is Active)
+curl -I https://$(terraform output -raw n8n_host 2>/dev/null || echo "n8n-dev.theyes.cloud")
+```
 
 ## Switching Between Environments
 
@@ -291,13 +370,16 @@ kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=n8n --tail=50
 ### Check n8n Access
 
 ```sh
-# For LoadBalancer (dev — no n8n_host set)
-kubectl get svc -n $NAMESPACE n8n
-# Wait for EXTERNAL-IP, then access: http://<EXTERNAL-IP>:5678
-
-# For Ingress (staging/production — n8n_host set)
+# Check ingress and managed certificate status
 kubectl get ingress -n $NAMESPACE
+kubectl get managedcertificate -n $NAMESPACE
 ```
+
+| Environment | URL |
+|-------------|-----|
+| dev | `https://n8n-dev.theyes.cloud` |
+| staging | `https://n8n-stage.theyes.cloud` |
+| production | `https://n8n.theyes.cloud` |
 
 ## Common Operations
 
@@ -372,6 +454,43 @@ kubectl describe externalsecret n8n-keys -n $NAMESPACE
 # Check ESO logs
 kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=external-secrets
 ```
+
+### Ingress Has No External IP
+
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+
+# Check ingress events for errors
+kubectl describe ingress n8n -n $NAMESPACE
+
+# Verify the ingress was created by Terraform (not Helm)
+terraform state list | grep n8n_ingress
+```
+
+The GCE load balancer may take 2-5 minutes to provision. If the ADDRESS column stays empty:
+- Check `kubectl describe ingress` for error events
+- Verify `n8n_host` is set in your tfvars file (ingress is only created when `n8n_host != ""`)
+
+### ManagedCertificate Stuck in "Provisioning"
+
+```sh
+kubectl describe managedcertificate -n $NAMESPACE
+dig +short <your-domain>
+```
+
+**Checklist:**
+1. DNS A record points to the ingress IP (not Cloudflare proxy IPs like 104.x.x.x)
+2. Cloudflare proxy is **OFF** — must be DNS-only (gray cloud)
+3. No Cloudflare origin rules rewriting ports
+4. Wait 10-15 minutes after DNS propagation
+
+### "Dangerous Site" or SSL Errors
+
+This means Cloudflare proxy is intercepting traffic:
+1. Go to Cloudflare dashboard → DNS → find the A record
+2. Click the orange cloud icon to toggle to **gray cloud (DNS-only)**
+3. Remove any origin rules that rewrite the port to 5678
+4. Wait 10-15 minutes for the Google-managed certificate to provision
 
 ### Wrong Environment
 

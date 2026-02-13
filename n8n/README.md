@@ -35,6 +35,7 @@ graph TB
 - **Cloud SQL** with private IP (no public access)
 - **External Secrets Operator** syncs from Secret Manager
 - **n8n** deployed via Helm chart
+- **GCE Ingress** with Google-managed TLS certificate (managed via `kubectl_manifest`, not Helm)
 
 ## Quick Start
 
@@ -89,20 +90,20 @@ For production use, deploy across isolated environments:
 
 ```
 yesgaming-nonprod (project)
-├── dev         → gs://yesgaming-tfstate-dev/n8n/
-└── staging     → gs://yesgaming-tfstate-staging/n8n/
+├── dev     → https://n8n-dev.theyes.cloud   → gs://yesgaming-tfstate-dev/n8n/
+└── staging → https://n8n-stage.theyes.cloud → gs://yesgaming-tfstate-staging/n8n/
 
 boxwood-coil-484213-r6 (project)
-└── production  → gs://yesgaming-tfstate-production/n8n/
+└── prod    → https://n8n.theyes.cloud       → gs://yesgaming-tfstate-production/n8n/
 ```
 
 **Key differences per environment:**
 
-| Environment | Nodes | SQL Tier | CIDR | Deletion Protection |
-|-------------|-------|----------|------|---------------------|
-| dev | 1 × e2-standard-2 | db-f1-micro | 10.10.0.0/16 | ✗ |
-| staging | 1 × e2-standard-2 | db-custom-2-7680 | 10.20.0.0/16 | ✓ |
-| production | 2 × e2-standard-4 | db-custom-4-15360 | 10.30.0.0/16 | ✓ |
+| Environment | Domain | Nodes | SQL Tier | CIDR |
+|-------------|--------|-------|----------|------|
+| dev | `n8n-dev.theyes.cloud` | 1 × e2-standard-2 | db-f1-micro | 10.10.0.0/16 |
+| staging | `n8n-stage.theyes.cloud` | 1 × e2-standard-2 | db-custom-2-7680 | 10.20.0.0/16 |
+| production | `n8n.theyes.cloud` | 2 × e2-standard-4 | db-custom-4-15360 | 10.30.0.0/16 |
 
 **Deploy to environment:**
 ```bash
@@ -134,6 +135,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for complete setup guide.
 - ✅ **Workload Identity** - No service account key files
 - ✅ **External Secrets Operator** - Secrets synced from Secret Manager (1h refresh)
 - ✅ **Dynamic resource naming** - `{org}-n8n-{env}-{resource}` pattern
+- ✅ **HTTPS with Google-managed certificates** - Automatic TLS via GCE Ingress + ManagedCertificate
 
 ## File Organization
 
@@ -148,7 +150,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for complete setup guide.
 | `cloudsql.tf` | PostgreSQL + auto-generated password |
 | `k8s_providers.tf` | Kubernetes provider authentication |
 | `external_secrets.tf` | ESO + Workload Identity + CRDs |
-| `n8n.tf` | n8n Helm deployment |
+| `n8n.tf` | n8n Helm deployment + GCE Ingress + ManagedCertificate |
 | `outputs.tf` | Cluster/DB metadata |
 
 ## Troubleshooting
@@ -187,6 +189,28 @@ kubectl get sa external-secrets -n n8n -o yaml | grep iam.gke.io
 
 **Fix:** Wait 60s after IAM binding for propagation (handled by `time_sleep.wait_for_wi`)
 
+### Ingress Has No External IP / SSL Errors
+
+```bash
+NAMESPACE=$(terraform output -raw namespace)
+
+# Check ingress status (ADDRESS should have an IP after 2-5 min)
+kubectl get ingress -n $NAMESPACE
+
+# Check ManagedCertificate (should be "Active" after DNS setup)
+kubectl get managedcertificate -n $NAMESPACE
+
+# Verify DNS resolves to ingress IP (not Cloudflare proxy IPs)
+dig +short n8n-dev.theyes.cloud
+```
+
+**Common causes:**
+- Cloudflare proxy enabled (orange cloud) → Switch to **DNS-only (gray cloud)**
+- Cloudflare port rewrite origin rule → Remove it (GCE LB handles port routing)
+- ManagedCertificate stuck in "Provisioning" → Verify DNS-only mode, wait 10-15 min
+
+See [DEPLOYMENT.md](DEPLOYMENT.md#dns-and-tls-setup-cloudflare) for detailed Cloudflare configuration.
+
 ### kubectl Plugin Error
 
 ```bash
@@ -208,11 +232,13 @@ terraform apply
 ### Verify Deployment
 
 ```bash
-# Check all components
-kubectl get pods,svc,externalsecret,secretstore -n n8n
+NAMESPACE=$(terraform output -raw namespace)
 
-# Get n8n URL
-kubectl get svc n8n -n n8n -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+# Check all components
+kubectl get pods,svc,ingress,externalsecret,secretstore -n $NAMESPACE
+
+# Check managed certificate status (should be "Active")
+kubectl get managedcertificate -n $NAMESPACE
 ```
 
 See [CLAUDE.md](../CLAUDE.md#troubleshooting) for detailed troubleshooting guide.
