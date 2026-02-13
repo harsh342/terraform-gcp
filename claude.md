@@ -4,13 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # terraform-gcp
 
-Terraform configurations for deploying infrastructure on GCP. Two main directories:
-- `learn/` - Simple sandbox configuration (VPC + VM)
 - `n8n/` - Production n8n workflow automation on GKE with Cloud SQL
 
-## Architecture (n8n)
+## Multi-Environment Architecture
 
-The n8n deployment uses a **multi-provider pattern** unique to Kubernetes-on-GCP scenarios:
+The n8n deployment supports 3 isolated environments (dev/staging/production) with:
+- **State storage:** Separate GCS buckets per environment (`gs://{org_prefix}-tfstate-{env}/n8n/`)
+- **Terraform workspaces:** One workspace per environment
+- **GCP projects:** dev and staging share `yesgaming-nonprod`; production uses `boxwood-coil-484213-r6`
+- **CIDR allocation:** Non-overlapping ranges to enable future VPC peering
+
+| Environment | Domain | Subnet | Pods | Services | Node Type | Node Count | SQL Tier |
+|-------------|--------|--------|------|----------|-----------|------------|----------|
+| dev | `n8n-dev.theyes.cloud` | 10.10.0.0/16 | 10.11.0.0/16 | 10.12.0.0/20 | e2-standard-2 | 1 | db-f1-micro |
+| staging | `n8n-stage.theyes.cloud` | 10.20.0.0/16 | 10.21.0.0/16 | 10.22.0.0/20 | e2-standard-2 | 1 | db-custom-2-7680 |
+| production | `n8n.theyes.cloud` | 10.30.0.0/16 | 10.31.0.0/16 | 10.32.0.0/20 | e2-standard-4 | 2 | db-custom-4-15360 |
+
+**Naming convention:** Resources follow `{org_prefix}-n8n-{environment}-{resource}` pattern
+- Example: `yesgaming-n8n-dev-gke`, `yesgaming-n8n-production-postgres`
+- K8s namespace: `n8n-{environment}`
+
+**Dynamic naming via locals:**
+```hcl
+locals {
+  namespace   = var.namespace != "" ? var.namespace : "n8n-${var.environment}"
+  name_prefix = var.org_prefix != "" ? "${var.org_prefix}-n8n-${var.environment}" : "n8n-${var.environment}"
+  common_labels = { environment = var.environment, managed_by = "terraform", application = "n8n" }
+}
+```
+
+## n8n Deployment Architecture
+
+The deployment uses a **multi-provider pattern** to handle GKE cluster bootstrapping:
 
 ```
 GCP Provider → Create GKE Cluster
@@ -19,25 +44,25 @@ k8s_providers.tf → Wire K8s/Helm/kubectl providers to cluster endpoint
     ↓
 kubectl Provider → Deploy CRDs (SecretStore, ExternalSecret)
     ↓
-Helm Provider → Deploy n8n application
+Helm Provider → Deploy External Secrets Operator + n8n
 ```
 
 **Why three Kubernetes providers?**
 - `kubernetes`: Native resources (namespace, service accounts)
-- `helm`: Chart deployments
-- `kubectl`: CRDs that must be planned before cluster exists (avoids plan-time errors)
+- `helm`: Chart deployments (ESO, n8n)
+- `kubectl`: CRDs that must be planned before cluster exists (avoids "resource type not found" errors)
 
 **Critical dependency chain:**
-1. `apis.tf` enables GCP APIs → must complete before any resource creation
-2. `network_gke.tf` creates VPC with Private Service Access → required for Cloud SQL private IP
-3. `gke.tf` creates cluster with Workload Identity → pool name needed for IAM bindings
-4. `external_secrets.tf` uses `depends_on = [google_container_cluster.gke]` for Workload Identity binding
-5. `external_secrets.tf` includes `time_sleep.wait_for_wi` (60s) to allow IAM propagation
-6. ExternalSecrets materialize K8s secrets → n8n Helm release depends on these
+1. `apis.tf` enables GCP APIs → all resources depend on this
+2. `network_gke.tf` creates VPC + Private Service Access → required for Cloud SQL private IP
+3. `gke.tf` creates cluster with Workload Identity → enables `{project_id}.svc.id.goog` pool
+4. `external_secrets.tf` binds GCP SA to K8s SA → includes 60s wait for IAM propagation
+5. `external_secrets.tf` deploys ESO Helm chart → installs CRDs with `installCRDs: true`
+6. `external_secrets.tf` creates SecretStore + ExternalSecrets → materializes K8s secrets
+7. `n8n.tf` deploys n8n Helm chart → depends on secrets existing
+8. `n8n.tf` creates GCE Ingress + ManagedCertificate via `kubectl_manifest` → depends on Helm release
 
-## Key Patterns
-
-### Secrets Flow (No secrets in Terraform state)
+**Secrets flow (zero secrets in Terraform state):**
 ```
 GCP Secret Manager
     ↓ (Workload Identity: GCP SA ↔ K8s SA)
@@ -45,188 +70,239 @@ External Secrets Operator
     ↓ (Syncs every 1h)
 K8s Secrets (n8n-keys, n8n-db)
     ↓ (Mounted as env vars)
-n8n Pod
+n8n Pod → Cloud SQL (private IP)
 ```
 
-**Important:** ESO Helm chart is now installed by Terraform in `external_secrets.tf` (previously manual). The chart installs CRDs automatically with `installCRDs: true`.
+## File Organization
 
-### Variable Pattern (No defaults for required values)
-`project_id`, `region`, `zone`, `network_name`, `cluster_name`, and all secret names have **no defaults** to force explicit passing. This prevents accidental exposure in public repos. Always pass via `-var` or `TF_VAR_*`.
-
-### Provider Wiring Pattern (k8s_providers.tf)
-All three K8s providers authenticate using `google_client_config.default.access_token` pointing to `google_container_cluster.gke.endpoint`. This creates an implicit dependency where providers are configured **after** cluster creation.
-
-## Common Commands
-
-```sh
-# Work from n8n/ directory
-cd n8n/
-
-# Standard workflow
-terraform init
-terraform fmt -recursive
-terraform validate
-terraform plan -out tfplan
-terraform apply tfplan
-
-# Apply with all required vars (example)
-terraform apply \
-  -var="project_id=my-project" \
-  -var="region=europe-north1" \
-  -var="zone=europe-north1-a" \
-  -var="network_name=n8n-network" \
-  -var="cluster_name=n8n-gke" \
-  -var="n8n_db_user=n8n" \
-  -var="cloudsql_instance_name=n8n-postgres" \
-  -var="cloudsql_database_name=n8n" \
-  -var="external_secrets_gcp_sa_name=n8n-external-secrets" \
-  -var="n8n_encryption_key_secret_name=n8n-encryption-key" \
-  -var="n8n_db_password_secret_name=n8n-db-password"
-
-# Get cluster credentials
-gcloud container clusters get-credentials n8n-gke --zone europe-north1-a
-
-# Check n8n status
-kubectl get pods -n n8n
-kubectl get svc -n n8n
-kubectl logs -n n8n -l app.kubernetes.io/name=n8n
-
-# Check External Secrets
-kubectl get externalsecret -n n8n
-kubectl get secretstore -n n8n
-kubectl describe externalsecret n8n-keys -n n8n
-```
-
-## Deployment Prerequisites
-
-**Before running Terraform:**
-
-1. Create secrets in GCP Secret Manager:
-```sh
-echo -n "$(openssl rand -hex 32)" | gcloud secrets create n8n-encryption-key \
-  --data-file=- --project=YOUR_PROJECT_ID
-
-echo -n "your-secure-password" | gcloud secrets create n8n-db-password \
-  --data-file=- --project=YOUR_PROJECT_ID
-```
-
-2. Authenticate gcloud and install kubectl plugin:
-```sh
-gcloud auth application-default login
-gcloud components install gke-gcloud-auth-plugin
-```
-
-**After first apply (cluster exists):**
-
-3. Create Cloud SQL user (CRITICAL - n8n will fail without this):
-```sh
-gcloud container clusters get-credentials n8n-gke --zone europe-north1-a --project YOUR_PROJECT_ID
-
-gcloud sql users create n8n \
-  --instance=n8n-postgres \
-  --password="your-secure-password" \
-  --project=YOUR_PROJECT_ID
-```
-
-4. Re-run terraform apply to deploy n8n application
-
-## File Organization (n8n/)
-
-Resources are grouped by concern in separate files:
+Files are grouped by infrastructure concern:
 
 | File | Purpose | Key Resources |
 |------|---------|--------------|
-| `variables.tf` | Input variables (no defaults for required) | All `variable` blocks |
-| `providers.tf` | Provider versions (pinned) | `terraform`, `required_providers` |
-| `k8s_providers.tf` | K8s provider auth wiring | `kubernetes`, `helm`, `kubectl` providers |
-| `apis.tf` | GCP API enablement (first step) | `google_project_service` |
-| `network_gke.tf` | VPC + Private Service Access | `google_compute_network`, `google_service_networking_connection` |
-| `gke.tf` | GKE cluster with Workload Identity | `google_container_cluster`, `google_container_node_pool` |
-| `cloudsql.tf` | PostgreSQL instance (private IP only) | `google_sql_database_instance`, `google_sql_database` |
-| `external_secrets.tf` | ESO + Workload Identity + ExternalSecrets | `kubectl_manifest` for CRDs, `helm_release` for ESO |
-| `n8n.tf` | n8n namespace and Helm deployment | `kubernetes_namespace_v1`, `helm_release` |
-| `outputs.tf` | Export cluster/DB info | `output` blocks |
+| `providers.tf` | Provider versions + GCS backend | `terraform {}`, `backend "gcs"` |
+| `variables.tf` | Input variables + locals | No defaults on required vars |
+| `k8s_providers.tf` | K8s provider authentication wiring | Dynamic cluster endpoint + token |
+| `apis.tf` | GCP API enablement | `google_project_service` |
+| `network_gke.tf` | VPC + Private Service Access | Uses `var.subnet_cidr`, `var.pods_cidr`, `var.services_cidr` |
+| `gke.tf` | GKE cluster + node pool | Adds `common_labels` |
+| `cloudsql.tf` | PostgreSQL + auto-generated password | Stores password in Secret Manager |
+| `external_secrets.tf` | ESO + Workload Identity + CRDs | Helm chart + kubectl manifests |
+| `n8n.tf` | n8n namespace + Helm + Ingress + ManagedCertificate | Ingress managed via `kubectl_manifest` (not Helm) |
+| `outputs.tf` | Cluster/DB info + environment metadata | `environment`, `workspace`, `namespace` |
+| `environments/*.tfvars` | Per-environment variable values | No sensitive data |
+## Common Commands
+
+### Initial Setup (per environment)
+
+See [DEPLOYMENT.md](n8n/DEPLOYMENT.md) for full step-by-step instructions. Summary of prerequisites before `terraform apply`:
+
+1. **Authenticate:** `gcloud auth application-default login && gcloud components install gke-gcloud-auth-plugin`
+2. **Enable APIs:** `gcloud services enable compute.googleapis.com container.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com servicenetworking.googleapis.com iam.googleapis.com --project=<PROJECT_ID>`
+3. **Create GCS bucket:** `gcloud storage buckets create gs://yesgaming-tfstate-{env} --project=<PROJECT_ID> --location=europe-north1 --uniform-bucket-level-access` + enable versioning
+4. **Create secrets:** encryption key (`openssl rand -hex 32`) + db-password placeholder in Secret Manager with `--replication-policy="automatic"`
+
+### Deploy to Environment
+
+```sh
+cd n8n/
+
+# Create workspace (first time only)
+terraform workspace new dev
+
+# Initialize with GCS backend
+terraform init -backend-config="bucket=yesgaming-tfstate-dev"
+
+# Standard workflow
+terraform fmt -recursive
+terraform validate
+terraform plan -var-file=environments/dev.tfvars -out=tfplan-dev
+terraform apply tfplan-dev
+
+# Get cluster credentials
+gcloud container clusters get-credentials $(terraform output -raw cluster_name) \
+  --zone $(terraform output -raw zone) --project $(terraform output -raw project_id)
+
+# Verify deployment
+kubectl get pods -n $(terraform output -raw namespace)
+kubectl get svc -n $(terraform output -raw namespace)
+kubectl logs -n $(terraform output -raw namespace) -l app.kubernetes.io/name=n8n --tail=50
+```
+
+### Switch Environments
+
+```sh
+# List workspaces
+terraform workspace list
+
+# Switch workspace
+terraform workspace select staging
+
+# Reconfigure backend (required when switching projects)
+terraform init -backend-config="bucket=yesgaming-tfstate-staging" -reconfigure
+
+# Now operate on staging
+terraform plan -var-file=environments/staging.tfvars
+```
+
+### Check External Secrets
+
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+kubectl get externalsecret -n $NAMESPACE
+kubectl get secretstore -n $NAMESPACE
+kubectl describe externalsecret n8n-keys -n $NAMESPACE
+kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=external-secrets
+```
+
+## Key Patterns
+
+### No Defaults on Required Variables
+`project_id`, `environment`, `subnet_cidr`, and all secret names have **no defaults** to prevent accidental exposure in public repos. Must be passed explicitly via `-var-file` or `TF_VAR_*`.
+
+### Provider Wiring Pattern
+All three K8s providers authenticate using `google_client_config.default.access_token` pointing to `google_container_cluster.gke.endpoint`. This creates an implicit dependency ensuring providers configure **after** cluster creation.
+
+### kubectl Provider for CRDs
+Use `kubectl_manifest` (not `kubernetes_manifest`) for CRDs to avoid plan-time errors when cluster doesn't exist. The kubectl provider can plan CRDs without a live cluster.
+
+### Workload Identity Binding
+```hcl
+# GCP SA ↔ K8s SA binding requires cluster to exist first
+resource "google_service_account_iam_member" "external_secrets_wi" {
+  member = "serviceAccount:${var.project_id}.svc.id.goog[${local.namespace}/${var.external_secrets_k8s_sa_name}]"
+  depends_on = [google_container_cluster.gke]
+}
+
+# 60s wait for IAM propagation
+resource "time_sleep" "wait_for_wi" {
+  create_duration = "60s"
+  depends_on = [google_service_account_iam_member.external_secrets_wi]
+}
+```
+
+### Cloud SQL Password Management
+Terraform generates a random password, creates the Cloud SQL user, and stores the password in Secret Manager. ExternalSecrets syncs it to K8s secrets. **Important:** The password is marked `sensitive = true` in outputs.
+
+### GCE Ingress Pattern
+The Ingress is managed via `kubectl_manifest` **outside** the Helm chart (`ingress.enabled = false` in Helm values). This is required because:
+- GKE's system `default-http-backend` NEG may not exist, causing `404: networkEndpointGroups not found` sync errors
+- The `kubectl_manifest` Ingress sets an explicit `defaultBackend` pointing to the n8n service, avoiding the broken system default backend
+- Uses annotation `kubernetes.io/ingress.class: gce` (not `spec.ingressClassName`) because GKE may not register an IngressClass resource
+- Path uses `/*` with `pathType: ImplementationSpecific` (required by GCE controller)
+- ManagedCertificate CRD is linked via `networking.gke.io/managed-certificates` annotation
+
+### Cloudflare DNS Configuration (Required for Google-Managed Certificates)
+When using Cloudflare as DNS provider for `theyes.cloud` domains:
+- **DNS records must be DNS-only (gray cloud)**, not Proxied (orange cloud). Cloudflare proxy resolves to Cloudflare IPs, preventing Google from verifying domain ownership for managed certificates.
+- **No port rewrite rules** — do not create Cloudflare origin rules to rewrite ports (e.g., to 5678). The GCE load balancer handles 80/443 → backend port routing internally.
+- **Post-deploy DNS workflow:** `terraform apply` → get ingress IP (`kubectl get ingress`) → create DNS-only A record in Cloudflare → wait 10-15 min for ManagedCertificate to go "Active"
 
 ## Troubleshooting
 
 **n8n pod CrashLoopBackOff - "password authentication failed":**
 ```sh
-# MOST COMMON ISSUE: Database user doesn't exist
-gcloud sql users list --instance=n8n-postgres --project=YOUR_PROJECT_ID
+# Check if Cloud SQL user exists
+gcloud sql users list --instance=$(terraform output -raw cloudsql_instance_name) \
+  --project=$(terraform output -raw project_id)
 
-# If n8n user missing, create it:
-gcloud sql users create n8n \
-  --instance=n8n-postgres \
-  --password="your-secure-password" \
-  --project=YOUR_PROJECT_ID
+# Verify password in Secret Manager (use the secret name from your tfvars)
+gcloud secrets versions access latest --secret=n8n-{environment}-db-password \
+  --project=$(terraform output -raw project_id)
 
-# Restart deployment
-kubectl rollout restart deployment n8n -n n8n
+# Check n8n logs
+kubectl logs -n $(terraform output -raw namespace) -l app.kubernetes.io/name=n8n --tail=50
 ```
 
 **kubectl: "executable gke-gcloud-auth-plugin not found":**
 ```sh
 gcloud components install gke-gcloud-auth-plugin
-gcloud container clusters get-credentials n8n-gke --zone europe-north1-a
+export USE_GKE_GCLOUD_AUTH_PLUGIN=True
 ```
 
 **ExternalSecret not syncing:**
 ```sh
-# Check SecretStore status
-kubectl get secretstore n8n-gcp-sm -n n8n -o yaml
+NAMESPACE=$(terraform output -raw namespace)
 
-# Check ExternalSecret status
-kubectl describe externalsecret n8n-keys -n n8n
+# Check SecretStore status (should show "Valid")
+kubectl get secretstore -n $NAMESPACE
 
-# Check ESO logs
-kubectl logs -n n8n -l app.kubernetes.io/name=external-secrets
-```
+# Check ExternalSecret status (should show "SecretSynced")
+kubectl get externalsecret -n $NAMESPACE
 
-**n8n pod not starting:**
-```sh
-# Check if secrets exist
-kubectl get secrets -n n8n
-
-# Check pod logs
-kubectl logs -n n8n -l app.kubernetes.io/name=n8n --tail=50
-
-# Check pod events
-kubectl describe pod -n n8n -l app.kubernetes.io/name=n8n
-
-# Verify DB connection (check private IP matches Cloud SQL)
-terraform output cloudsql_private_ip
+# Debug sync issues
+kubectl describe externalsecret n8n-keys -n $NAMESPACE
+kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=external-secrets
 ```
 
 **Workload Identity errors:**
-- Ensure `depends_on = [google_container_cluster.gke]` exists in `external_secrets.tf:36`
+- Verify `depends_on = [google_container_cluster.gke]` exists in `external_secrets.tf`
+- Check K8s SA annotation: `kubectl get sa external-secrets -n $(terraform output -raw namespace) -o yaml`
+- Look for `iam.gke.io/gcp-service-account` annotation pointing to GCP SA email
 - Wait 60s after IAM binding (handled by `time_sleep.wait_for_wi`)
-- Verify annotation on K8s SA: `kubectl get sa external-secrets -n n8n -o yaml`
+
+**GCE Ingress has no external IP:**
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+
+# Check ingress status (ADDRESS column should have an IP)
+kubectl get ingress -n $NAMESPACE
+
+# Check GCE ingress controller events for errors
+kubectl describe ingress n8n -n $NAMESPACE
+
+# Look for NEG or backend errors in events
+# Common error: "networkEndpointGroups/... was not found" → already handled by defaultBackend pattern
+```
+
+**ManagedCertificate stuck in "Provisioning":**
+```sh
+NAMESPACE=$(terraform output -raw namespace)
+kubectl describe managedcertificate -n $NAMESPACE
+```
+- Verify DNS A record points to the ingress IP: `dig n8n-dev.theyes.cloud`
+- Verify Cloudflare DNS is set to **DNS-only (gray cloud)**, not Proxied (orange cloud)
+- Remove any Cloudflare origin rules that rewrite ports
+- Certificate provisioning takes 10-15 minutes after DNS propagates
+
+**"Dangerous site" or SSL errors after Cloudflare setup:**
+- Cloudflare proxy (orange cloud) is intercepting traffic. Switch to DNS-only (gray cloud).
+- Cloudflare port rewrite origin rules are bypassing the GCE load balancer. Remove them.
+
+**Wrong environment deployed:**
+```sh
+# Always verify before applying
+terraform workspace show           # Should match intended environment
+terraform output environment       # Should match workspace
+terraform output project_id        # Should be correct project
+terraform output namespace         # Should be n8n-{environment}
+```
 
 ## Important Notes
 
-- **Two-step deployment required**:
-  1. First `terraform apply` creates cluster, Cloud SQL, and ESO
-  2. Manually create database user: `gcloud sql users create n8n`
-  3. Second `terraform apply` deploys n8n application
-
-  **Why?** Terraform can't create Cloud SQL users (requires password), and n8n fails without the user.
-
-- **No defaults on required vars**: Prevents accidental credential exposure. Always pass explicitly.
-
-- **kubectl provider for CRDs**: Avoids plan-time errors when cluster doesn't exist yet. Don't replace with `kubernetes_manifest`.
-
-- **Private Service Access**: Created in `network_gke.tf` before Cloud SQL. Don't remove `google_service_networking_connection`.
-
-- **ESO Helm chart**: Now managed by Terraform (not manual install). Uses version 0.9.13.
-
-- **License key is optional**: `n8n_license_activation_key_secret_name` defaults to `""` and is conditionally added to ExternalSecret.
-
-- **kubectl plugin required**: Install `gke-gcloud-auth-plugin` before using kubectl with GKE.
+- **State stored in GCS:** Never commit `.tfstate` files. Each environment has separate bucket.
+- **Workspaces are namespace only:** Workspaces provide organization but state is still per-backend-bucket.
+- **ESO Helm chart managed by Terraform:** Don't manually install ESO. Version pinned to 0.9.13.
+- **License key is optional:** `n8n_license_activation_key_secret_name` defaults to `""` and conditionally added to ExternalSecret.
+- **Private Service Access:** `google_service_networking_connection` in `network_gke.tf` is required for Cloud SQL private IP. Don't remove.
+- **CIDR ranges are parameterized:** Use `var.subnet_cidr`, `var.pods_cidr`, `var.services_cidr` (not hardcoded).
+- **Resource naming is dynamic:** Uses `local.name_prefix` and `local.namespace` computed from `var.environment` and `var.org_prefix`.
+- **HTTPS via Google-managed certificates:** When `n8n_host` is set, `n8n.tf` creates a `ManagedCertificate` CRD and a GCE Ingress via `kubectl_manifest`. DNS A records must point to the ingress IP (DNS-only, not proxied) for cert provisioning to succeed.
+- **Ingress managed outside Helm:** The Helm chart's ingress is disabled. Ingress is created via `kubectl_manifest` to set an explicit `defaultBackend` and avoid GKE's broken default-http-backend NEG.
+- **`.tfvars` files are gitignored at root** but tracked under `n8n/environments/` via the n8n-level `.gitignore` which only ignores `environments/*.auto.tfvars` and `environments/local.tfvars`.
 
 ## Coding Conventions
 
 - 2-space indentation, `snake_case` naming
 - Block comments (`/* */`) at file headers
-- Resources grouped by concern in separate files
-- Pin provider versions in `providers.tf` for reproducibility
+- Resources grouped by concern in separate files (not monolithic)
+- Pin provider versions in `providers.tf` for reproducibility (currently: google 6.8.0, kubernetes 3.0.1, helm 2.12.1, kubectl 1.19.0, random 3.8.1)
 - Use `depends_on` explicitly for Workload Identity and cross-provider dependencies
+- Add `common_labels` to all GCP resources for environment tracking
+- Use `local.name_prefix` for resource names, `local.namespace` for K8s namespace
+- Mark sensitive outputs with `sensitive = true` (e.g., database passwords)
+
+## Documentation
+
+- **DEPLOYMENT.md:** Comprehensive multi-environment deployment guide with prerequisites, step-by-step instructions, troubleshooting, and best practices
+- **environments/README.md:** Environment-specific configuration differences and customization guide
+- **Root README.md:** High-level repository overview and quick links

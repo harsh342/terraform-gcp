@@ -13,6 +13,21 @@ variable "project_id" {
   # No default - must be provided to avoid exposing project IDs in public repos
 }
 
+variable "environment" {
+  type        = string
+  description = "Environment: dev, staging, production"
+  validation {
+    condition     = contains(["dev", "staging", "production"], var.environment)
+    error_message = "Must be dev, staging, or production"
+  }
+}
+
+variable "org_prefix" {
+  type        = string
+  description = "Org prefix for naming (e.g., 'yesgaming')"
+  default     = ""
+}
+
 variable "region" {
   type        = string
   description = "GCP region"
@@ -28,6 +43,21 @@ variable "network_name" {
   description = "VPC network name for n8n infrastructure"
 }
 
+variable "subnet_cidr" {
+  type        = string
+  description = "Primary subnet CIDR"
+}
+
+variable "pods_cidr" {
+  type        = string
+  description = "Secondary range for pods"
+}
+
+variable "services_cidr" {
+  type        = string
+  description = "Secondary range for services"
+}
+
 variable "cluster_name" {
   type        = string
   description = "GKE cluster name"
@@ -36,7 +66,7 @@ variable "cluster_name" {
 variable "namespace" {
   type        = string
   description = "Kubernetes namespace for n8n"
-  default     = "n8n"
+  default     = ""
 }
 
 variable "node_machine_type" {
@@ -127,7 +157,16 @@ variable "external_secrets_store_name" {
 # Optional: hostname for ingress (if empty, chart will use LoadBalancer service).
 variable "n8n_host" {
   type        = string
-  description = "Public hostname for n8n ingress. Example: n8n.example.com (optional)."
+  description = "Public hostname for n8n HTTPS ingress with Google-managed TLS certificate. Example: n8n-dev.theyes.cloud"
+  default     = ""
+}
+
+# Optional: explicit webhook/editor base URL for n8n.
+# Required for LoadBalancer setups where the external IP is dynamic.
+# If unset and n8n_host is provided, the URL is derived from n8n_host automatically.
+variable "n8n_webhook_url" {
+  type        = string
+  description = "External base URL for n8n webhooks and editor. Overrides the URL derived from n8n_host. Example: http://34.88.223.46:5678"
   default     = ""
 }
 
@@ -137,4 +176,20 @@ variable "n8n_chart_version" {
   type        = string
   description = "Helm chart version for community-charts/n8n"
   default     = "1.16.25"
+}
+
+locals {
+  namespace   = var.namespace != "" ? var.namespace : "n8n-${var.environment}"
+  name_prefix = var.org_prefix != "" ? "${var.org_prefix}-n8n-${var.environment}" : "n8n-${var.environment}"
+
+  # Effective webhook URL: explicit override > derived from n8n_host > empty (n8n defaults to localhost)
+  webhook_url = var.n8n_webhook_url != "" ? var.n8n_webhook_url : (
+    var.n8n_host != "" ? "https://${var.n8n_host}" : ""
+  )
+
+  common_labels = {
+    environment = var.environment
+    managed_by  = "terraform"
+    application = "n8n"
+  }
 }

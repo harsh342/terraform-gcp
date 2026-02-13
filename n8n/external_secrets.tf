@@ -7,8 +7,8 @@
 */
 
 resource "google_service_account" "external_secrets" {
-  account_id   = var.external_secrets_gcp_sa_name
-  display_name = "n8n External Secrets"
+  account_id   = "${local.name_prefix}-eso"
+  display_name = "n8n External Secrets - ${var.environment}"
 }
 
 resource "google_project_iam_member" "external_secrets_sm_access" {
@@ -30,7 +30,7 @@ resource "kubernetes_service_account_v1" "external_secrets" {
 resource "google_service_account_iam_member" "external_secrets_wi" {
   service_account_id = google_service_account.external_secrets.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.namespace}/${var.external_secrets_k8s_sa_name}]"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${local.namespace}/${var.external_secrets_k8s_sa_name}]"
 
   # The Workload Identity pool only exists after the GKE cluster is created
   depends_on = [google_container_cluster.gke]
@@ -76,8 +76,8 @@ resource "kubectl_manifest" "secret_store" {
     apiVersion = "external-secrets.io/v1beta1"
     kind       = "SecretStore"
     metadata = {
-      name      = var.external_secrets_store_name
-      namespace = var.namespace
+      name      = "${var.external_secrets_store_name}-${var.environment}"
+      namespace = local.namespace
     }
     spec = {
       provider = {
@@ -86,7 +86,7 @@ resource "kubectl_manifest" "secret_store" {
           auth = {
             workloadIdentity = {
               clusterLocation = var.zone
-              clusterName     = var.cluster_name
+              clusterName     = "${local.name_prefix}-gke"
               serviceAccountRef = {
                 name = var.external_secrets_k8s_sa_name
               }
@@ -126,12 +126,12 @@ resource "kubectl_manifest" "n8n_keys" {
     kind       = "ExternalSecret"
     metadata = {
       name      = "n8n-keys"
-      namespace = var.namespace
+      namespace = local.namespace
     }
     spec = {
       refreshInterval = "1h"
       secretStoreRef = {
-        name = var.external_secrets_store_name
+        name = "${var.external_secrets_store_name}-${var.environment}"
         kind = "SecretStore"
       }
       target = {
@@ -150,12 +150,12 @@ resource "kubectl_manifest" "n8n_db" {
     kind       = "ExternalSecret"
     metadata = {
       name      = "n8n-db"
-      namespace = var.namespace
+      namespace = local.namespace
     }
     spec = {
       refreshInterval = "1h"
       secretStoreRef = {
-        name = var.external_secrets_store_name
+        name = "${var.external_secrets_store_name}-${var.environment}"
         kind = "SecretStore"
       }
       target = {

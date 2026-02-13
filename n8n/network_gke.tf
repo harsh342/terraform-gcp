@@ -5,33 +5,33 @@
 */
 
 resource "google_compute_network" "vpc_network" {
-  name                    = var.network_name
+  name                    = "${local.name_prefix}-network"
   auto_create_subnetworks = false
 
   depends_on = [google_project_service.apis]
 }
 
 resource "google_compute_subnetwork" "subnet" {
-  name          = "${var.network_name}-subnet"
+  name          = "${local.name_prefix}-subnet"
   region        = var.region
   network       = google_compute_network.vpc_network.id
-  ip_cidr_range = "10.10.0.0/16"
+  ip_cidr_range = var.subnet_cidr
 
   # Secondary ranges are used by GKE for Pods and Services IPs.
   secondary_ip_range {
     range_name    = "pods"
-    ip_cidr_range = "10.20.0.0/16"
+    ip_cidr_range = var.pods_cidr
   }
 
   secondary_ip_range {
     range_name    = "services"
-    ip_cidr_range = "10.30.0.0/20"
+    ip_cidr_range = var.services_cidr
   }
 }
 
 # Private Services Access range for Cloud SQL private IP.
 resource "google_compute_global_address" "private_services" {
-  name          = "${var.network_name}-psa"
+  name          = "${local.name_prefix}-psa"
   purpose       = "VPC_PEERING"
   address_type  = "INTERNAL"
   prefix_length = 16
